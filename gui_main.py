@@ -63,14 +63,27 @@ class RobotGui(QMainWindow):
         self.setWindowTitle("Robot Arm Control System")
         self.resize(1200, 800)
 
-        # Socket para comunicación con la simulación
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.target_addr = ("127.0.0.1", 5005)
-
-        # Main Layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
+
+        # Socket para enviar a la simulación
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.target_addr = ("127.0.0.1", 5005)
+
+        # Socket para recibir de la simulación
+        self.recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.recv_sock.bind(("127.0.0.1", 5006))
+            self.recv_sock.setblocking(False)
+        except Exception as e:
+            print(f"No se pudo enlazar el puerto de feedback: {e}")
+
+        # Timer para feedback UDP
+        self.feedback_timer = QTimer()
+        self.feedback_timer.timeout.connect(self.sync_from_sim)
+        self.feedback_timer.start(50) # Polling cada 50ms
 
         # Subprocess management
         self.ser = None
@@ -300,6 +313,24 @@ class RobotGui(QMainWindow):
     def send_camera_angles(self, angles):
         msg = json.dumps({"type": "angles", "data": angles})
         self.sock.sendto(msg.encode(), self.target_addr)
+
+    def sync_from_sim(self):
+        try:
+            while True:
+                data, addr = self.recv_sock.recvfrom(1024)
+                msg = json.loads(data.decode())
+                if msg.get("type") == "sync_angles":
+                    angles = msg["data"]
+                    # Bloquear señales para no reenviar a la simulación
+                    for i, angle in enumerate(angles):
+                        if i < len(self.sliders):
+                            self.sliders[i].blockSignals(True)
+                            self.sliders[i].setValue(int(angle))
+                            self.sliders[i].blockSignals(False)
+        except BlockingIOError:
+            pass
+        except Exception as e:
+            print(f"Error en sync_from_sim: {e}")
 
     def reset_camera_sim(self):
         msg = json.dumps({"type": "reset_camera"})

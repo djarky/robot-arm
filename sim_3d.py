@@ -2,6 +2,7 @@ import sys
 import socket
 import json
 import os
+import math
 from ursina import *
 from panda3d.core import ConfigVariableString
 
@@ -24,6 +25,78 @@ window.color = color.light_gray
 
 DEFAULT_CAM_POS = (2.3, 3.54, -7.09)
 DEFAULT_CAM_ROT = (-346.42, -18.57, 0)
+
+# Socket para enviar datos de vuelta a la GUI
+feedback_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+GUI_ADDR = ("127.0.0.1", 5006)
+
+class CircularSlider(Entity):
+    def __init__(self, target_entity, axis='y', radius=0.8, slider_color=color.cyan, **kwargs):
+        # Generar una "rosquilla" (toroide) ultra-estilizada y delgada
+        segments = 100 # Resolución para suavidad
+        path = [Vec3(math.cos(math.radians(i*(360/segments)))*radius, 0, math.sin(math.radians(i*(360/segments)))*radius) for i in range(segments + 1)]
+            
+        # Sección transversal cómoda y robusta
+        thickness = 0.045 # Aumentado al triple para mejor agarre
+        cross_segments = 12
+        # IMPORTANTE: Usar Vec3 para evitar el TypeError en el generador de Pipe interno
+        cross_section = [Vec3(math.cos(math.radians(i*(360/cross_segments)))*thickness, math.sin(math.radians(i*(360/cross_segments)))*thickness, 0) for i in range(cross_segments + 1)]
+        
+        super().__init__(
+            parent=target_entity,
+            model=Pipe(path=path, base_shape=cross_section, cap_ends=False),
+            color=color.rgba(slider_color.r, slider_color.g, slider_color.b, 0.4),
+            double_sided=True,
+            collider='mesh',
+            **kwargs
+        )
+        # Forzar suavizado de malla y look de "luz"
+        if self.model:
+            self.model.generate_normals()
+            self.model.smooth = True
+            
+        self.unlit = True 
+        self.target = target_entity
+        self.axis = axis
+        self.radius = radius
+        self.base_color = slider_color
+        self.dragging = False
+        self.pulse_time = 0
+
+    def on_mouse_enter(self):
+        self.color = color.rgba(1, 1, 1, 0.9)
+        self.scale = 1.02 # Muy sutil
+    
+    def on_mouse_exit(self):
+        if not self.dragging:
+            self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
+            self.scale = 1.0
+
+    def input(self, key):
+        if key == 'left mouse down' and mouse.hovered_entity == self:
+            self.dragging = True
+            self.color = color.yellow
+        elif key == 'left mouse up':
+            self.dragging = False
+            self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
+            self.scale = 1.0
+
+    def update(self):
+        # Efecto de pulso sutil (glow)
+        self.pulse_time += time.dt * 2
+        if not self.dragging:
+            alpha = 0.3 + math.sin(self.pulse_time) * 0.1
+            self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, alpha)
+
+        if self.dragging:
+            delta = mouse.velocity[0] + mouse.velocity[1]
+            if self.axis == 'y':
+                self.target.rotation_y += delta * 500
+            else:
+                self.target.rotation_x -= delta * 500
+            
+            if hasattr(scene, 'sim_instance'):
+                scene.sim_instance.sync_to_gui()
 
 class RobotArmSim:
     def __init__(self):
@@ -49,25 +122,30 @@ class RobotArmSim:
         
         # Junta 0: Rotación Base (Y). Pivot
         self.joint0 = Entity(parent=self.arm_origin) 
+        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.0)
         
         # Link 1 visual: Pilar central (Gris oscuro). Anclado a Joint0.
-        self.link1_vis = Entity(parent=self.joint0, model='cube', color=link_color, scale=(0.3, 1.5, 0.3), y=0.75)
+        self.link1_vis = Entity(parent=self.joint0, model='cube', color=link_color, scale=(0.3, 1.5, 0.3), y=0.75, collider='box')
         
         # Junta 1: Hombro (X). Pivot al final del link1
         self.joint1 = Entity(parent=self.joint0, y=1.5) 
+        self.slider1 = CircularSlider(self.joint1, axis='x', radius=0.6, rotation_z=90)
+
         # Tapa visual azul del hombro 
         self.j1_vis = Entity(parent=self.joint1, model='cube', color=joint_color, scale=(0.5, 0.3, 0.5), rotation_x=90)
         
         # Link 2 visual: Brazo principal (Gris oscuro). Anclado a Joint1.
-        self.link2_vis = Entity(parent=self.joint1, model='cube', color=link_color, scale=(0.25, 1.5, 0.25), y=0.75)
+        self.link2_vis = Entity(parent=self.joint1, model='cube', color=link_color, scale=(0.25, 1.5, 0.25), y=0.75, collider='box')
         
         # Junta 2: Codo (X). Pivot al final del link2
         self.joint2 = Entity(parent=self.joint1, y=1.5)
+        self.slider2 = CircularSlider(self.joint2, axis='x', radius=0.5, rotation_z=90)
+
         # Tapa visual azul del codo
         self.j2_vis = Entity(parent=self.joint2, model='cube', color=joint_color, scale=(0.4, 0.2, 0.4), rotation_x=90)
         
         # Link 3 visual: Antebrazo (Gris oscuro). Anclado a Joint2
-        self.link3_vis = Entity(parent=self.joint2, model='cylinder', color=link_color, scale=(0.2, 0.8, 0.2), y=0.4)
+        self.link3_vis = Entity(parent=self.joint2, model='cylinder', color=link_color, scale=(0.2, 0.8, 0.2), y=0.4, collider='box')
         
         # Pinza (Gripper) visual al final del antebrazo
         # Lo rotamos para que mire hacia adelante (eje Z local de la muñeca) en lugar de hacia arriba
@@ -92,6 +170,24 @@ class RobotArmSim:
 
         self.last_save_time = time.time()
         self.load_camera_config()
+        
+        self.selected_joint = None
+        self.rotation_mode = False
+        scene.sim_instance = self
+
+    def sync_to_gui(self):
+        # Enviar ángulos actuales a la GUI para sincronizar sliders
+        # Joint0 -> y, Joint1 -> -x, Joint2 -> -x
+        angles = [
+            round(self.joint0.rotation_y, 1),
+            round(-self.joint1.rotation_x, 1),
+            round(-self.joint2.rotation_x, 1)
+        ]
+        msg = json.dumps({"type": "sync_angles", "data": angles})
+        try:
+            feedback_sock.sendto(msg.encode(), GUI_ADDR)
+        except:
+            pass
 
     def load_camera_config(self, reset=False):
         try:
@@ -175,6 +271,35 @@ class RobotArmSim:
             except Exception as e:
                 print("Error decodificando UDP:", e)
                 
+        # Selección de piezas al hacer clic
+        if mouse.left and not any(s.dragging for s in [self.slider0, self.slider1, self.slider2]):
+            if mouse.hovered_entity:
+                # Buscar a qué link pertenece
+                if mouse.hovered_entity in [self.link1_vis, self.slider0]:
+                    self.select_joint(0)
+                elif mouse.hovered_entity in [self.link2_vis, self.slider1, self.j1_vis]:
+                    self.select_joint(1)
+                elif mouse.hovered_entity in [self.link3_vis, self.slider2, self.j2_vis]:
+                    self.select_joint(2)
+
+        # Modo Rotación (Tecla R)
+        if held_keys['r'] and self.selected_joint is not None:
+            self.rotation_mode = True
+        
+        if self.rotation_mode:
+            delta = mouse.velocity[0] * 200
+            if self.selected_joint == 0:
+                self.joint0.rotation_y += delta
+            elif self.selected_joint == 1:
+                self.joint1.rotation_x -= delta
+            elif self.selected_joint == 2:
+                self.joint2.rotation_x -= delta
+            
+            self.sync_to_gui()
+            
+            if mouse.left: # Confirmar
+                self.rotation_mode = False
+
         # Control manual de fallback con el ratón solo si se presiona la tecla shift, 
         # para no interferir con la EditorCamera por defecto.
         if held_keys['shift']:
@@ -183,11 +308,18 @@ class RobotArmSim:
                 self.joint1.rotation_x -= mouse.velocity[1] * 100
             elif mouse.right:
                 self.joint2.rotation_x -= mouse.velocity[1] * 100
+            self.sync_to_gui()
         
         # Guardar posición de cámara cada 5 segundos si ha cambiado notablemente
         if time.time() - self.last_save_time > 5:
             self.save_camera_config()
             self.last_save_time = time.time()
+
+    def select_joint(self, index):
+        self.selected_joint = index
+        # Visual feedback for selection
+        for i, slider in enumerate([self.slider0, self.slider1, self.slider2]):
+            slider.color = color.yellow if i == index else color.rgba(0, 1, 1, 0.5)
 
 sim = RobotArmSim()
 
