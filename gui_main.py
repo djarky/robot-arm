@@ -14,41 +14,55 @@ import serial
 import serial.tools.list_ports
 
 class CameraThread(QThread):
-    image_update = Signal(np.ndarray, list)
+    image_update = Signal(np.ndarray, list, list) # frame, pose_lms, hand_lms
 
     def __init__(self):
         super().__init__()
         self.running = True
-        self.model_path = 'hand_landmarker.task'
+        self.pose_model = 'pose_landmarker.task'
+        self.hand_model = 'hand_landmarker.task'
 
     def run(self):
-        # Importación diferida para evitar conflictos con hilos
         import mediapipe as mp
         BaseOptions = mp.tasks.BaseOptions
+        
+        # Pose Options
+        PoseLandmarker = mp.tasks.vision.PoseLandmarker
+        PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+        
+        # Hand Options
         HandLandmarker = mp.tasks.vision.HandLandmarker
         HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+        
         VisionRunningMode = mp.tasks.vision.RunningMode
 
-        options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=self.model_path),
+        pose_options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=self.pose_model),
+            running_mode=VisionRunningMode.IMAGE
+        )
+        hand_options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=self.hand_model),
             running_mode=VisionRunningMode.IMAGE,
-            num_hands=2
+            num_hands=1
         )
         
         cap = cv2.VideoCapture(0)
-        with HandLandmarker.create_from_options(options) as landmarker:
+        with PoseLandmarker.create_from_options(pose_options) as pose_landmarker, \
+             HandLandmarker.create_from_options(hand_options) as hand_landmarker:
+             
             while self.running:
                 success, frame = cap.read()
                 if success:
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-                    result = landmarker.detect(mp_image)
                     
-                    landmarks = []
-                    if result.hand_landmarks:
-                        landmarks = result.hand_landmarks
-                        
-                    self.image_update.emit(frame, landmarks)
+                    pose_result = pose_landmarker.detect(mp_image)
+                    hand_result = hand_landmarker.detect(mp_image)
+                    
+                    pose_lms = pose_result.pose_landmarks if pose_result.pose_landmarks else []
+                    hand_lms = hand_result.hand_landmarks if hand_result.hand_landmarks else []
+                    
+                    self.image_update.emit(frame, pose_lms, hand_lms)
                 else:
                     self.msleep(30)
         cap.release()
@@ -285,23 +299,77 @@ class RobotGui(QMainWindow):
         })
         self.sock.sendto(msg.encode(), self.target_addr)
 
-    def update_image(self, frame, landmarks):
-        if landmarks:
-            h, w, _ = frame.shape
-            for hand_lms in landmarks:
-                # Dibujar esqueleto básico
-                for lm in hand_lms:
-                    cx, cy = int(lm.x * w), int(lm.y * h)
-                    cv2.circle(frame, (cx, cy), 3, (0, 255, 0), cv2.FILLED)
-                
-                # Mapear gestos (Ejemplo simple base)
-                # Usamos el x del landmark 0 para la rotación base
-                base_angle = int((hand_lms[0].x - 0.5) * -180)
-                # Usamos y del landmark 8 para el brazo
-                arm_angle = int((hand_lms[8].y - 0.5) * 180)
-                
-                # Enviar a simulación
-                self.send_camera_angles([base_angle, arm_angle, 0])
+    def update_image(self, frame, pose_landmarks_list, hand_landmarks_list):
+        h, w, _ = frame.shape
+        base_angle = 0
+        shoulder_angle = 0
+        elbow_angle = 0
+        
+        # 1. Pose Processing (Shoulder & Elbow)
+        if pose_landmarks_list:
+            for pose_lms in pose_landmarks_list:
+                try:
+                    shoulder = pose_lms[12]
+                    elbow = pose_lms[14]
+                    wrist = pose_lms[16]
+
+                    # Dibujar esqueleto del brazo
+                    pts = []
+                    for lm in [shoulder, elbow, wrist]:
+                        cx, cy = int(lm.x * w), int(lm.y * h)
+                        pts.append((cx, cy))
+                        cv2.circle(frame, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
+                    cv2.line(frame, pts[0], pts[1], (255, 0, 0), 2)
+                    cv2.line(frame, pts[1], pts[2], (255, 0, 0), 2)
+
+                    # Hombro (Joint 1)
+                    v1 = np.array([elbow.x - shoulder.x, elbow.y - shoulder.y])
+                    v_up = np.array([0, -1])
+                    unit_v1 = v1 / (np.linalg.norm(v1) + 1e-6)
+                    shoulder_angle = int(np.degrees(np.arccos(np.clip(np.dot(unit_v1, v_up), -1.0, 1.0))) - 90)
+
+                    # Codo (Joint 2)
+                    v_arm = np.array([shoulder.x - elbow.x, shoulder.y - elbow.y])
+                    v_forearm = np.array([wrist.x - elbow.x, wrist.y - elbow.y])
+                    unit_arm = v_arm / (np.linalg.norm(v_arm) + 1e-6)
+                    unit_forearm = v_forearm / (np.linalg.norm(v_forearm) + 1e-6)
+                    elbow_angle = int(180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0))))
+                    
+                    # Fallback para Base si no hay mano
+                    base_angle = int((wrist.x - shoulder.x) * -200)
+                except: pass
+
+        # 2. Hand Processing (Base Rotation via Palm)
+        if hand_landmarks_list:
+            for hand_lms in hand_landmarks_list:
+                try:
+                    # Dibujar puntos de la mano
+                    for lm in hand_lms:
+                        cx, cy = int(lm.x * w), int(lm.y * h)
+                        cv2.circle(frame, (cx, cy), 2, (0, 255, 255), cv2.FILLED)
+                    
+                    # Calcular rotación de la palma (Vector Muñeca[0] -> Base Dedo Medio[9])
+                    wrist_lm = hand_lms[0]
+                    middle_mcp = hand_lms[9]
+                    
+                    # Ángulo en el plano de la imagen
+                    dx = middle_mcp.x - wrist_lm.x
+                    dy = middle_mcp.y - wrist_lm.y
+                    palm_angle = np.degrees(np.arctan2(dy, dx))
+                    
+                    # Mapear ángulo de la palma a rotación de la base (-180 a 180)
+                    # Ajustamos 90 grados para que la mano vertical sea 0
+                    base_angle = int(palm_angle + 90)
+                except: pass
+
+        if pose_landmarks_list or hand_landmarks_list:
+            self.send_camera_angles([
+                max(-180, min(180, base_angle)),
+                max(-180, min(180, shoulder_angle)),
+                max(-180, min(180, elbow_angle))
+            ])
+            cv2.putText(frame, f"Base (Palm): {base_angle}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
