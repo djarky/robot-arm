@@ -37,7 +37,7 @@ class CircularSlider(Entity):
         path = [Vec3(math.cos(math.radians(i*(360/segments)))*radius, 0, math.sin(math.radians(i*(360/segments)))*radius) for i in range(segments + 1)]
             
         # Sección transversal cómoda y robusta
-        thickness = 0.045 # Aumentado al triple para mejor agarre
+        thickness = 0.06 # Aumentado para máximo agarre y visibilidad
         cross_segments = 12
         # IMPORTANTE: Usar Vec3 para evitar el TypeError en el generador de Pipe interno
         cross_section = [Vec3(math.cos(math.radians(i*(360/cross_segments)))*thickness, math.sin(math.radians(i*(360/cross_segments)))*thickness, 0) for i in range(cross_segments + 1)]
@@ -122,7 +122,7 @@ class RobotArmSim:
         
         # Junta 0: Rotación Base (Y). Pivot
         self.joint0 = Entity(parent=self.arm_origin) 
-        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.0)
+        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.2, y=0.1)
         
         # Link 1 visual: Pilar central (Gris oscuro). Anclado a Joint0.
         self.link1_vis = Entity(parent=self.joint0, model='cube', color=link_color, scale=(0.3, 1.5, 0.3), y=0.75, collider='box')
