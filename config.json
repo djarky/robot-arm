@@ -12,9 +12,9 @@
         ]
     },
     "joint_angles": [
-        -180,
-        61,
-        84
+        -119,
+        -56,
+        -180
     ],
     "serial_port": "/dev/ttyS31"
 }

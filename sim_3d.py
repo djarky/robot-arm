@@ -109,50 +109,55 @@ class RobotArmSim:
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
         Entity(model='cube', color=color.green, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
         Entity(model='cube', color=color.blue, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
-
-        # Colores personalizados basados en la imagen (Gris oscuro y Azul metálico)
-        joint_color = color.rgb(100, 130, 170)
-        link_color = color.rgb(60, 60, 60)
+        # Paleta de colores Pastel - Saturados y Unlit para evitar el blanco
+        # Nota: Ursina espera valores entre 0.0 y 1.0. Dividimos por 255.
+        color_sage = color.rgb(160/255, 200/255, 140/255)
+        color_rose = color.rgb(230/255, 150/255, 170/255)
+        color_lavender = color.rgb(180/255, 150/255, 220/255)
+        color_cream = color.rgb(240/255, 230/255, 140/255)
+        color_orange = color.rgb(240/255, 180/255, 120/255)
+        color_mint = color.rgb(150/255, 210/255, 170/255)
+        color_peach = color.rgb(240/255, 160/255, 140/255)
         
         # Jerarquía base
         self.arm_origin = Entity(parent=scene, y=0.4) # Origen general del brazo
         
-        # Base visual (Azul)
-        self.base_vis = Entity(parent=scene, model='cube', color=joint_color, scale=(0.8, 0.4, 0.8), y=0.2)
+        # Base visual (Sage) - Unlit para color real
+        self.base_vis = Entity(parent=scene, model='cube', color=color_sage, scale=(0.8, 0.4, 0.8), y=0.2, unlit=True)
         
         # Junta 0: Rotación Base (Y). Pivot
         self.joint0 = Entity(parent=self.arm_origin) 
-        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.2, y=0.1)
+        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.2, y=0.1, slider_color=color.cyan)
         
-        # Link 1 visual: Pilar central (Gris oscuro). Anclado a Joint0.
-        self.link1_vis = Entity(parent=self.joint0, model='cube', color=link_color, scale=(0.3, 1.5, 0.3), y=0.75, collider='box')
+        # Link 1 visual: Pilar central (Rosa). Unlit.
+        self.link1_vis = Entity(parent=self.joint0, model='cube', color=color_rose, scale=(0.3, 1.5, 0.3), y=0.75, collider='box', unlit=True)
         
         # Junta 1: Hombro (X). Pivot al final del link1
         self.joint1 = Entity(parent=self.joint0, y=1.5) 
-        self.slider1 = CircularSlider(self.joint1, axis='x', radius=0.6, rotation_z=90)
+        self.slider1 = CircularSlider(self.joint1, axis='x', radius=0.6, rotation_z=90, slider_color=color.cyan)
 
-        # Tapa visual azul del hombro 
-        self.j1_vis = Entity(parent=self.joint1, model='cube', color=joint_color, scale=(0.5, 0.3, 0.5), rotation_x=90)
+        # Tapa visual lavanda del hombro - Unlit.
+        self.j1_vis = Entity(parent=self.joint1, model='cube', color=color_lavender, scale=(0.5, 0.3, 0.5), rotation_x=90, unlit=True)
         
-        # Link 2 visual: Brazo principal (Gris oscuro). Anclado a Joint1.
-        self.link2_vis = Entity(parent=self.joint1, model='cube', color=link_color, scale=(0.25, 1.5, 0.25), y=0.75, collider='box')
+        # Link 2 visual: Brazo principal (Amarillo). Unlit.
+        self.link2_vis = Entity(parent=self.joint1, model='cube', color=color_cream, scale=(0.25, 1.5, 0.25), y=0.75, collider='box', unlit=True)
         
         # Junta 2: Codo (X). Pivot al final del link2
         self.joint2 = Entity(parent=self.joint1, y=1.5)
-        self.slider2 = CircularSlider(self.joint2, axis='x', radius=0.5, rotation_z=90)
+        self.slider2 = CircularSlider(self.joint2, axis='x', radius=0.5, rotation_z=90, slider_color=color.cyan)
 
-        # Tapa visual azul del codo
-        self.j2_vis = Entity(parent=self.joint2, model='cube', color=joint_color, scale=(0.4, 0.2, 0.4), rotation_x=90)
+        # Tapa visual naranja del codo - Unlit.
+        self.j2_vis = Entity(parent=self.joint2, model='cube', color=color_orange, scale=(0.4, 0.2, 0.4), rotation_x=90, unlit=True)
         
-        # Link 3 visual: Antebrazo (Gris oscuro). Anclado a Joint2
-        self.link3_vis = Entity(parent=self.joint2, model='cylinder', color=link_color, scale=(0.2, 0.8, 0.2), y=0.4, collider='box')
+        # Link 3 visual: Antebrazo (Menta). Unlit.
+        self.link3_vis = Entity(parent=self.joint2, model='cylinder', color=color_mint, scale=(0.2, 0.8, 0.2), y=0.4, collider='box', unlit=True)
         
-        # Pinza (Gripper) visual al final del antebrazo
+        # Pinza (Gripper) visual al final del antebrazo - Unlit.
         # Lo rotamos para que mire hacia adelante (eje Z local de la muñeca) en lugar de hacia arriba
         self.gripper_base = Entity(parent=self.joint2, y=0.8, rotation_x=90)
-        Entity(parent=self.gripper_base, model='cube', color=link_color, scale=(0.5, 0.1, 0.4))              # Palma
-        Entity(parent=self.gripper_base, model='cube', color=link_color, scale=(0.1, 0.4, 0.1), position=(-0.15, 0.2, 0)) # Dedo Izq
-        Entity(parent=self.gripper_base, model='cube', color=link_color, scale=(0.1, 0.4, 0.1), position=(0.15, 0.2, 0))  # Dedo Der
+        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.5, 0.1, 0.4), unlit=True)              # Palma
+        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.1, 0.4, 0.1), position=(-0.15, 0.2, 0), unlit=True) # Dedo Izq
+        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.1, 0.4, 0.1), position=(0.15, 0.2, 0), unlit=True)  # Dedo Der
         
         self.angles = [0, 0, 0]        
         
@@ -319,7 +324,7 @@ class RobotArmSim:
         self.selected_joint = index
         # Visual feedback for selection
         for i, slider in enumerate([self.slider0, self.slider1, self.slider2]):
-            slider.color = color.yellow if i == index else color.rgba(0, 1, 1, 0.5)
+            slider.color = color.yellow if i == index else color.rgba(0, 1, 1, 0.4) # Restaurado a Cyan (0,1,1) base con glow
 
 sim = RobotArmSim()
 
