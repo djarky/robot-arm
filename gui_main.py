@@ -348,35 +348,22 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
                         180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0)))
                     )
 
-                    base_angle = int((wrist.x - shoulder.x) * -200)
+                    # Base (Joint 0) - Mapeo vertical "Torso como Piso"
+                    # Si el brazo está hacia arriba (wrist.y < shoulder.y), tiende a -90
+                    # Si el brazo está hacia abajo (wrist.y > shoulder.y), tiende a 90
+                    dy_normalized = (wrist.y - shoulder.y) * 2  # Escalar para mayor sensibilidad
+                    base_angle = int(np.clip(dy_normalized * 90, -90, 90))
                 except Exception:
                     pass
 
-        # --- Hand landmarks → base rotation via palm orientation ---
-        if hand_landmarks_list:
-            for hand_lms in hand_landmarks_list:
-                try:
-                    for lm in hand_lms:
-                        cx, cy = int(lm.x * w), int(lm.y * h)
-                        cv2.circle(frame, (cx, cy), 2, (0, 255, 255), cv2.FILLED)
-
-                    wrist_lm = hand_lms[0]
-                    middle_mcp = hand_lms[9]
-                    dx = middle_mcp.x - wrist_lm.x
-                    dy = middle_mcp.y - wrist_lm.y
-                    palm_angle = np.degrees(np.arctan2(dy, dx))
-                    base_angle = int(palm_angle + 90)
-                except Exception:
-                    pass
-
-        if pose_landmarks_list or hand_landmarks_list:
+        if pose_landmarks_list:
             self.send_camera_angles([
                 max(-180, min(180, base_angle)),
                 max(-180, min(180, shoulder_angle)),
                 max(-180, min(180, elbow_angle)),
             ])
             cv2.putText(
-                frame, f"Base (Palm): {base_angle}",
+                frame, f"Base (Pose): {base_angle}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
             )
 
