@@ -523,7 +523,8 @@ class RobotGui(QMainWindow):
         name, ok = QInputDialog.getText(self, "Guardar Pose", "Nombre de la Pose:")
         if ok and name:
             angles = [s.value() for s in self.sliders]
-            thumb_path = os.path.join(self.pose_icons_dir, f"{name}.png")
+            thumb_path = os.path.abspath(os.path.join(self.pose_icons_dir, f"{name}.png"))
+            print(f"DEBUG: Solicitando screenshot en: {thumb_path}")
             
             # Pedir a Ursina que tome un screenshot
             msg = json.dumps({"type": "screenshot", "path": thumb_path})
@@ -533,8 +534,8 @@ class RobotGui(QMainWindow):
             self.saved_poses[name] = angles
             self.save_poses_data()
             
-            # Pequeño delay para que Ursina guarde el archivo antes de leerlo
-            QTimer.singleShot(500, lambda: self.refresh_pose_gallery())
+            # Pequeño delay de 1s para asegurar que Ursina guarde el archivo antes de leerlo
+            QTimer.singleShot(1000, lambda: self.refresh_pose_gallery())
 
     def load_poses_data(self):
         if os.path.exists(self.poses_file):

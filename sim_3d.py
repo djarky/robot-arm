@@ -275,9 +275,26 @@ class RobotArmSim:
                     self.load_camera_config(reset=True)
                 elif msg.get("type") == "screenshot":
                     path = msg.get("path", "pose_thumb.png")
-                    # Ursina screenshot saves to the desktop or project root by default. 
-                    # We want a specific path.
-                    window.screenshot(name=path, delay=0)
+                    print(f"DEBUG: Sim recibio orden de screenshot. CWD: {os.getcwd()}")
+                    print(f"DEBUG: Intentando guardar en: {path}")
+                    
+                    # Usar Panda3D directamente para mayor control
+                    from panda3d.core import Filename
+                    try:
+                        # Asegurar que el directorio padre existe
+                        parent_dir = os.path.dirname(path)
+                        if not os.path.exists(parent_dir):
+                            os.makedirs(parent_dir)
+                            print(f"DEBUG: Creado directorio {parent_dir}")
+                        
+                        # Usar win.saveScreenshot para control total del nombre de archivo
+                        # base.screenshot usa prefijos, win.saveScreenshot usa el path exacto
+                        from panda3d.core import Filename
+                        fn = Filename.fromOsSpecific(path)
+                        base.win.saveScreenshot(fn)
+                        print(f"DEBUG: win.saveScreenshot llamado hacia {path}")
+                    except Exception as e:
+                        print(f"DEBUG: Fallo al tomar screenshot: {e}")
             except Exception as e:
                 print("Error decodificando UDP:", e)
                 
