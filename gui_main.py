@@ -394,6 +394,9 @@ class RobotGui(QMainWindow):
         self.pose_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pose_list.itemDoubleClicked.connect(self.load_pose_item)
         self.pose_list.setSelectionMode(QListWidget.SingleSelection)
+        self.pose_list.setDragEnabled(False)
+        self.pose_list.setAcceptDrops(False)
+        self.pose_list.setDragDropMode(QListWidget.NoDragDrop)
         
         btns = QHBoxLayout()
         self.btn_save_pose = QPushButton("Snapshot")
@@ -556,7 +559,8 @@ class RobotGui(QMainWindow):
             
             # Crear item y su widget custom
             item = QListWidgetItem(self.pose_list)
-            item.setText(name)
+            # Guardamos el nombre en el UserRole para evitar duplicidad de texto
+            item.setData(Qt.UserRole, name)
             item.setSizeHint(QSize(90, 115))
             
             widget = PoseWidget(name, thumb_path, show_delete=False)
@@ -567,7 +571,7 @@ class RobotGui(QMainWindow):
             self.pose_list.setItemWidget(item, widget)
 
     def load_pose_item(self, item):
-        name = item.text()
+        name = item.data(Qt.UserRole)
         if name in self.saved_poses:
             angles = self.saved_poses[name]
             for i, val in enumerate(angles):
@@ -576,7 +580,7 @@ class RobotGui(QMainWindow):
     def delete_selected_pose(self):
         item = self.pose_list.currentItem()
         if item:
-            name = item.text()
+            name = item.data(Qt.UserRole)
             if name in self.saved_poses:
                 del self.saved_poses[name]
                 self.save_poses_data()
@@ -586,7 +590,7 @@ class RobotGui(QMainWindow):
         item = self.pose_list.currentItem()
         if not item: return
         
-        pose_name = item.text()
+        pose_name = item.data(Qt.UserRole)
         thumb_path = os.path.join(self.pose_icons_dir, f"{pose_name}.png")
         
         # Añadir conector de tiempo si ya hay items
