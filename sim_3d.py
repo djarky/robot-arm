@@ -273,6 +273,11 @@ class RobotArmSim:
                     self.spawn_object(msg["shape"], msg["size"], msg["mass"])
                 elif msg.get("type") == "reset_camera":
                     self.load_camera_config(reset=True)
+                elif msg.get("type") == "screenshot":
+                    path = msg.get("path", "pose_thumb.png")
+                    # Ursina screenshot saves to the desktop or project root by default. 
+                    # We want a specific path.
+                    window.screenshot(name=path, delay=0)
             except Exception as e:
                 print("Error decodificando UDP:", e)
                 

@@ -1,11 +1,71 @@
 import sys
 import cv2
 import numpy as np
+import serial.tools.list_ports
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QDockWidget, 
-                             QFormLayout, QDoubleSpinBox, QComboBox, QGroupBox, QSlider)
-from PySide6.QtCore import QTimer, Qt, QThread, Signal
-from PySide6.QtGui import QImage, QPixmap
+                             QFormLayout, QDoubleSpinBox, QComboBox, QGroupBox, QSlider,
+                             QListWidget, QListWidgetItem, QInputDialog, QFrame, QScrollArea,
+                             QSizePolicy)
+from PySide6.QtCore import QTimer, Qt, QThread, Signal, QSize
+from PySide6.QtGui import QImage, QPixmap, QIcon
+
+class PoseWidget(QFrame):
+    def __init__(self, pose_name, thumb_path, parent=None, show_delete=True):
+        super().__init__(parent)
+        self.pose_name = pose_name
+        self.setFixedSize(100, 110)
+        self.setStyleSheet("QFrame { background-color: #333; border-radius: 5px; border: 1px solid #555; } QFrame:hover { border: 1px solid #2196F3; }")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+        
+        if show_delete:
+            self.btn_del = QPushButton("×")
+            self.btn_del.setFixedSize(18, 18)
+            self.btn_del.setStyleSheet("background-color: #c62828; color: white; border-radius: 9px; font-weight: bold; font-size: 14px;")
+            layout.addWidget(self.btn_del, 0, Qt.AlignRight)
+        else:
+            layout.addSpacing(18) # Space where delete button would be
+        
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(90, 60)
+        if os.path.exists(thumb_path):
+            pix = QPixmap(thumb_path).scaled(90, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.icon_label.setPixmap(pix)
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        self.icon_label.setStyleSheet("border: none; background: transparent;")
+        
+        self.name_label = QLabel(pose_name)
+        self.name_label.setStyleSheet("color: white; font-size: 10px; font-weight: bold; border: none;")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        
+        layout.addWidget(self.icon_label, 0, Qt.AlignCenter)
+        layout.addWidget(self.name_label, 0, Qt.AlignCenter)
+        layout.addStretch()
+
+class TimeConnectorWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(60)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.time_input = QDoubleSpinBox()
+        self.time_input.setRange(0.1, 10.0)
+        self.time_input.setValue(2.0)
+        self.time_input.setSuffix("s")
+        self.time_input.setStyleSheet("font-size: 10px;")
+        
+        arrow = QLabel("→")
+        arrow.setAlignment(Qt.AlignCenter)
+        arrow.setStyleSheet("font-size: 20px; color: #888;")
+        
+        layout.addStretch()
+        layout.addWidget(self.time_input)
+        layout.addWidget(arrow)
+        layout.addStretch()
 import mediapipe as mp
 import subprocess
 import json
@@ -107,29 +167,52 @@ class RobotGui(QMainWindow):
         self.sim_panel = QGroupBox("3D Simulation View")
         sim_layout = QVBoxLayout()
         
+        # Top Spawn Panel (New Location)
+        self.setup_sim_top_panel(sim_layout)
+        
         self.sim_container = QWidget()
         self.sim_container.setStyleSheet("background-color: black;")
         self.sim_container.setMinimumSize(600, 400)
         
+        button_layout = QHBoxLayout()
         self.btn_launch_sim = QPushButton("Lanzar Simulación 3D (Ursina)")
         self.btn_launch_sim.clicked.connect(self.launch_simulation)
-        
         self.btn_reset_cam = QPushButton("Reset View")
         self.btn_reset_cam.clicked.connect(self.reset_camera_sim)
-        
-        button_layout = QHBoxLayout()
         button_layout.addWidget(self.btn_launch_sim)
         button_layout.addWidget(self.btn_reset_cam)
         
         sim_layout.addWidget(self.sim_container)
+        
+        # Bottom Timeline Panel (Visual Quadricula)
+        self.setup_visual_timeline(sim_layout)
+        
+        button_layout = QHBoxLayout()
+        self.btn_launch_sim = QPushButton("Lanzar Simulación 3D (Ursina)")
+        self.btn_launch_sim.clicked.connect(self.launch_simulation)
+        self.btn_reset_cam = QPushButton("Reset View")
+        self.btn_reset_cam.clicked.connect(self.reset_camera_sim)
+        self.btn_play_seq = QPushButton("▶ REPRODUCIR SECUENCIA")
+        self.btn_play_seq.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px;")
+        self.btn_play_seq.clicked.connect(self.play_sequence)
+        
+        button_layout.addWidget(self.btn_launch_sim)
+        button_layout.addWidget(self.btn_reset_cam)
+        button_layout.addWidget(self.btn_play_seq)
+        
         sim_layout.addLayout(button_layout)
+        sim_layout.setStretch(0, 0) # Top Panel
+        sim_layout.setStretch(1, 10) # Sim Container
+        sim_layout.setStretch(2, 0) # Timeline Panel
+        sim_layout.setStretch(3, 0) # Button Layout
+        
         self.sim_panel.setLayout(sim_layout)
-        self.main_layout.addWidget(self.sim_panel, 7)
+        self.main_layout.addWidget(self.sim_panel, 8) # Aumentado el peso de la simulación
 
         # Right Panel: Camera and Controls
         self.right_panel = QWidget()
         self.right_layout = QVBoxLayout(self.right_panel)
-        self.main_layout.addWidget(self.right_panel, 3)
+        self.main_layout.addWidget(self.right_panel, 2) # Reducido el peso del panel derecho
 
         self.setup_camera_panel()
         self.setup_control_panel()
@@ -145,15 +228,127 @@ class RobotGui(QMainWindow):
         self.cam_thread.image_update.connect(self.update_image)
         self.camera_active = False
 
+        # Pose & Movement Data
+        self.poses_file = "poses.json"
+        self.saved_poses = {} # { "Pose Name": [a,b,c] }
+        self.pose_icons_dir = "pose_thumbnails"
+        if not os.path.exists(self.pose_icons_dir):
+            os.makedirs(self.pose_icons_dir)
+        self.load_poses_data()
+
+        # Interpolation Engine
+        self.interp_timer = QTimer()
+        self.interp_timer.timeout.connect(self.update_interpolation)
+        self.target_angles = [0, 0, 0]
+        self.current_interp_sequence = []
+        self.current_seq_index = -1
+        self.interp_steps = 0
+        self.interp_count = 0
+        self.interp_deltas = [0, 0, 0]
+
+    def setup_sim_top_panel(self, parent_layout):
+        spawn_row = QHBoxLayout()
+        spawn_row.addWidget(QLabel("Spawn:"))
+        self.obj_type = QComboBox()
+        self.obj_type.addItems(["cube", "cylinder"])
+        self.obj_size = QDoubleSpinBox(); self.obj_size.setValue(0.5); self.obj_size.setSingleStep(0.1)
+        self.obj_mass = QDoubleSpinBox(); self.obj_mass.setValue(1.0)
+        self.btn_spawn = QPushButton("Spawn")
+        self.btn_spawn.clicked.connect(self.spawn_request)
+        
+        spawn_row.addWidget(self.obj_type)
+        spawn_row.addWidget(QLabel("S:"))
+        spawn_row.addWidget(self.obj_size)
+        spawn_row.addWidget(QLabel("M:"))
+        spawn_row.addWidget(self.obj_mass)
+        spawn_row.addWidget(self.btn_spawn)
+        spawn_row.addStretch()
+        parent_layout.addLayout(spawn_row)
+
+    def setup_visual_timeline(self, parent_layout):
+        self.timeline_group = QGroupBox("Timeline de Movimiento")
+        tl_main_vbox = QVBoxLayout()
+        tl_main_vbox.setContentsMargins(5, 2, 5, 5)
+        tl_main_vbox.setSpacing(0)
+        
+        # Header con botone de colapsar
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_toggle_tl = QPushButton("▼") # Flecha hacia abajo (abierto)
+        self.btn_toggle_tl.setFixedSize(30, 20)
+        self.btn_toggle_tl.clicked.connect(self.toggle_timeline)
+        header_layout.addWidget(self.btn_toggle_tl)
+        header_layout.addStretch()
+        
+        # Contenedor de TODO el contenido del timeline (el que se oculta)
+        self.tl_container_widget = QWidget()
+        self.tl_container_layout = QHBoxLayout(self.tl_container_widget)
+        self.tl_container_layout.setContentsMargins(0, 2, 0, 0)
+        
+        # Scroll Area para el timeline horizontal
+        self.tl_scroll = QScrollArea()
+        self.tl_scroll.setWidgetResizable(True)
+        self.tl_scroll.setFixedHeight(150)
+        self.tl_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        
+        self.tl_content = QWidget()
+        self.tl_layout = QHBoxLayout(self.tl_content)
+        self.tl_layout.setAlignment(Qt.AlignLeft)
+        self.tl_scroll.setWidget(self.tl_content)
+        
+        # Botones de control lateral
+        self.tl_side_controls = QWidget()
+        side_ctrl_layout = QVBoxLayout(self.tl_side_controls)
+        side_ctrl_layout.setContentsMargins(5, 0, 0, 0)
+        
+        self.btn_add_tl = QPushButton("+")
+        self.btn_add_tl.setFixedSize(40, 40)
+        self.btn_add_tl.setStyleSheet("font-size: 24px; font-weight: bold; background-color: #2196F3; color: white; border-radius: 20px;")
+        self.btn_add_tl.clicked.connect(self.add_selected_to_timeline)
+        
+        self.btn_clear_tl = QPushButton("Clear")
+        self.btn_clear_tl.setFixedWidth(50)
+        self.btn_clear_tl.clicked.connect(self.clear_visual_timeline)
+        
+        side_ctrl_layout.addWidget(self.btn_add_tl)
+        side_ctrl_layout.addWidget(self.btn_clear_tl)
+        
+        self.tl_container_layout.addWidget(self.tl_scroll)
+        self.tl_container_layout.addWidget(self.tl_side_controls)
+        
+        tl_main_vbox.addLayout(header_layout)
+        tl_main_vbox.addWidget(self.tl_container_widget)
+        
+        self.timeline_group.setLayout(tl_main_vbox)
+        self.timeline_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        
+        parent_layout.addWidget(self.timeline_group)
+        self.timeline_widgets = []
+
+    def toggle_timeline(self):
+        is_visible = self.tl_container_widget.isVisible()
+        self.tl_container_widget.setVisible(not is_visible)
+        self.btn_toggle_tl.setText("▲" if is_visible else "▼")
+        
+        if is_visible:
+            # Colapsado
+            self.timeline_group.setMaximumHeight(50)
+        else:
+            # Expandido
+            self.timeline_group.setMaximumHeight(250)
+            
+        # Forzar al layout a auto-acomodarse
+        self.main_layout.activate()
+
     def setup_camera_panel(self):
         group = QGroupBox("Camera Tracking")
         layout = QVBoxLayout()
         self.cam_label = QLabel("Cámara desactivada")
         self.cam_label.setAlignment(Qt.AlignCenter)
-        self.cam_label.setFixedSize(320, 240)
-        self.cam_label.setStyleSheet("background-color: black; color: white;")
+        self.cam_label.setFixedSize(200, 150) # Más pequeño
+        self.cam_label.setStyleSheet("background-color: black; color: white; border-radius: 5px;")
         
-        self.btn_toggle_cam = QPushButton("Activar Cámara")
+        self.btn_toggle_cam = QPushButton("Activar Seguimiento")
         self.btn_toggle_cam.clicked.connect(self.toggle_camera)
         
         layout.addWidget(self.cam_label)
@@ -162,8 +357,8 @@ class RobotGui(QMainWindow):
         self.right_layout.addWidget(group)
 
     def setup_control_panel(self):
-        # Joint Sliders (Mouse Fallback)
-        joint_group = QGroupBox("Manual Control (Sliders)")
+        # Joint Sliders (Manual Control)
+        joint_group = QGroupBox("Manual Control")
         joint_layout = QFormLayout()
         self.sliders = []
         for i in range(3):
@@ -171,30 +366,39 @@ class RobotGui(QMainWindow):
             s.setRange(-180, 180)
             s.setValue(0)
             s.valueChanged.connect(self.send_angles)
-            joint_layout.addRow(f"Articulación {i+1}:", s)
+            joint_layout.addRow(f"J{i}:", s)
             self.sliders.append(s)
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
 
-        # Spawning Group
-        spawn_group = QGroupBox("Spawn Objects")
-        spawn_layout = QFormLayout()
-        self.obj_type = QComboBox()
-        self.obj_type.addItems(["cube", "cylinder"])
-        self.obj_size = QDoubleSpinBox(); self.obj_size.setValue(1.0)
-        self.obj_mass = QDoubleSpinBox(); self.obj_mass.setValue(1.0)
-        self.btn_spawn = QPushButton("Spawn Object")
-        self.btn_spawn.clicked.connect(self.spawn_request)
-        spawn_layout.addRow("Tipo:", self.obj_type)
-        spawn_layout.addRow("Escala:", self.obj_size)
-        spawn_layout.addRow("Masa:", self.obj_mass)
-        spawn_layout.addWidget(self.btn_spawn)
-        spawn_group.setLayout(spawn_layout)
-        self.right_layout.addWidget(spawn_group)
+        # Pose Gallery (Custom List)
+        pose_group = QGroupBox("Galería de Poses")
+        pose_layout = QVBoxLayout()
+        
+        self.pose_list = QListWidget()
+        self.pose_list.setIconSize(QSize(100, 110))
+        self.pose_list.setSpacing(5)
+        self.pose_list.setMinimumHeight(400)
+        self.pose_list.itemDoubleClicked.connect(self.load_pose_item)
+        self.pose_list.setSelectionMode(QListWidget.SingleSelection)
+        
+        btns = QHBoxLayout()
+        self.btn_save_pose = QPushButton("Snapshot")
+        self.btn_save_pose.clicked.connect(self.save_current_pose)
+        self.btn_del_pose = QPushButton("Del")
+        self.btn_del_pose.clicked.connect(self.delete_selected_pose)
+        btns.addWidget(self.btn_save_pose)
+        btns.addWidget(self.btn_del_pose)
+        
+        pose_layout.addWidget(self.pose_list)
+        pose_layout.addLayout(btns)
+        pose_group.setLayout(pose_layout)
+        self.right_layout.addWidget(pose_group)
 
         # Connection Group (Hardware)
-        conn_group = QGroupBox("Hardware Control (Arduino)")
+        conn_group = QGroupBox("Hardware")
         conn_layout = QVBoxLayout()
+
         
         port_layout = QHBoxLayout()
         self.port_selector = QComboBox()
@@ -298,6 +502,184 @@ class RobotGui(QMainWindow):
             "mass": self.obj_mass.value()
         })
         self.sock.sendto(msg.encode(), self.target_addr)
+
+    # --- POSE SYSTEM ---
+    def save_current_pose(self):
+        name, ok = QInputDialog.getText(self, "Guardar Pose", "Nombre de la Pose:")
+        if ok and name:
+            angles = [s.value() for s in self.sliders]
+            thumb_path = os.path.join(self.pose_icons_dir, f"{name}.png")
+            
+            # Pedir a Ursina que tome un screenshot
+            msg = json.dumps({"type": "screenshot", "path": thumb_path})
+            self.sock.sendto(msg.encode(), self.target_addr)
+            
+            # Guardamos datos
+            self.saved_poses[name] = angles
+            self.save_poses_data()
+            
+            # Pequeño delay para que Ursina guarde el archivo antes de leerlo
+            QTimer.singleShot(500, lambda: self.refresh_pose_gallery())
+
+    def load_poses_data(self):
+        if os.path.exists(self.poses_file):
+            try:
+                with open(self.poses_file, "r") as f:
+                    self.saved_poses = json.load(f)
+                self.refresh_pose_gallery()
+            except: pass
+
+    def save_poses_data(self):
+        with open(self.poses_file, "w") as f:
+            json.dump(self.saved_poses, f, indent=4)
+
+    def refresh_pose_gallery(self):
+        self.pose_list.clear()
+        for name, angles in self.saved_poses.items():
+            thumb_path = os.path.join(self.pose_icons_dir, f"{name}.png")
+            
+            # Crear item y su widget custom
+            item = QListWidgetItem(self.pose_list)
+            item.setText(name)
+            item.setSizeHint(QSize(110, 120))
+            
+            widget = PoseWidget(name, thumb_path, show_delete=False)
+            # Para que el doble click funcione en el widget, lo hacemos transparente a eventos o lo manejamos
+            widget.setAttribute(Qt.WA_TransparentForMouseEvents)
+            
+            self.pose_list.addItem(item)
+            self.pose_list.setItemWidget(item, widget)
+
+    def load_pose_item(self, item):
+        name = item.text()
+        if name in self.saved_poses:
+            angles = self.saved_poses[name]
+            for i, val in enumerate(angles):
+                self.sliders[i].setValue(val)
+
+    def delete_selected_pose(self):
+        item = self.pose_list.currentItem()
+        if item:
+            name = item.text()
+            if name in self.saved_poses:
+                del self.saved_poses[name]
+                self.save_poses_data()
+                self.refresh_pose_gallery()
+
+    def add_selected_to_timeline(self):
+        item = self.pose_list.currentItem()
+        if not item: return
+        
+        pose_name = item.text()
+        thumb_path = os.path.join(self.pose_icons_dir, f"{pose_name}.png")
+        
+        # Añadir conector de tiempo si ya hay items
+        if self.timeline_widgets:
+            conn = TimeConnectorWidget()
+            self.tl_layout.addWidget(conn)
+            self.timeline_widgets.append(conn)
+            
+        # Añadir step de pose
+        step = PoseWidget(pose_name, thumb_path, show_delete=True)
+        step.btn_del.clicked.connect(lambda: self.remove_from_timeline(step))
+        self.tl_layout.addWidget(step)
+        self.timeline_widgets.append(step)
+        
+    def remove_from_timeline(self, widget):
+        # Encontrar el índice
+        if widget in self.timeline_widgets:
+            idx = self.timeline_widgets.index(widget)
+            # Eliminar el widget y su conector previo o siguiente
+            if idx > 0 and isinstance(self.timeline_widgets[idx-1], TimeConnectorWidget):
+                self.tl_layout.removeWidget(self.timeline_widgets[idx-1])
+                self.timeline_widgets[idx-1].deleteLater()
+                self.timeline_widgets.pop(idx-1)
+                idx -= 1
+            elif idx < len(self.timeline_widgets) - 1 and isinstance(self.timeline_widgets[idx+1], TimeConnectorWidget):
+                self.tl_layout.removeWidget(self.timeline_widgets[idx+1])
+                self.timeline_widgets[idx+1].deleteLater()
+                self.timeline_widgets.pop(idx+1)
+            
+            self.tl_layout.removeWidget(widget)
+            widget.deleteLater()
+            self.timeline_widgets.pop(idx)
+
+    def clear_visual_timeline(self):
+        for w in self.timeline_widgets:
+            self.tl_layout.removeWidget(w)
+            w.deleteLater()
+        self.timeline_widgets = []
+
+    def play_sequence(self):
+        # Convertir timeline widgets a lista de poses/tiempos
+        self.current_interp_sequence = []
+        
+        # El primer widget DEBE ser un Step. Los conectores están entre Steps.
+        # [Step0, Conn0, Step1, Conn1, Step2]
+        
+        for i in range(len(self.timeline_widgets)):
+            w = self.timeline_widgets[i]
+            if isinstance(w, PoseWidget):
+                pose_name = w.pose_name
+                duration = 0.5 # Default rápido si es el primero
+                
+                # Buscar el conector PREVIO para saber cuánto tiempo tardar en LLEGAR a esta pose
+                if i > 0 and isinstance(self.timeline_widgets[i-1], TimeConnectorWidget):
+                    duration = self.timeline_widgets[i-1].time_input.value()
+                
+                if pose_name in self.saved_poses:
+                    self.current_interp_sequence.append({
+                        "angles": self.saved_poses[pose_name],
+                        "duration": duration
+                    })
+        
+        if self.current_interp_sequence:
+            self.current_seq_index = 0
+            self.btn_play_seq.setEnabled(False)
+            self.start_next_in_sequence()
+
+    def start_next_in_sequence(self):
+        if self.current_seq_index >= len(self.current_interp_sequence):
+            self.btn_play_seq.setEnabled(True)
+            return
+            
+        target = self.current_interp_sequence[self.current_seq_index]
+        self.target_angles = target["angles"]
+        duration = target["duration"]
+        
+        # FPS sim para interpolación (ej: 30 fps)
+        fps = 30
+        self.interp_steps = int(duration * fps)
+        self.interp_count = 0
+        
+        current_angles = [s.value() for s in self.sliders]
+        self.interp_deltas = [
+            (self.target_angles[i] - current_angles[i]) / self.interp_steps
+            for i in range(3)
+        ]
+        
+        self.interp_timer.start(int(1000/fps))
+
+    def update_interpolation(self):
+        self.interp_count += 1
+        if self.interp_count <= self.interp_steps:
+            for i in range(3):
+                # Usar float temporal para precisión si fuera necesario, 
+                # pero los sliders son int. Hacemos casting.
+                new_val = self.sliders[i].value() + self.interp_deltas[i]
+                self.sliders[i].blockSignals(True)
+                self.sliders[i].setValue(int(new_val))
+                self.sliders[i].blockSignals(False)
+            self.send_angles() # Enviar a sim y hardware
+        else:
+            self.interp_timer.stop()
+            # Asegurar valor exacto al final
+            for i in range(3):
+                self.sliders[i].setValue(self.target_angles[i])
+            self.send_angles()
+            
+            self.current_seq_index += 1
+            self.start_next_in_sequence()
 
     def update_image(self, frame, pose_landmarks_list, hand_landmarks_list):
         h, w, _ = frame.shape
