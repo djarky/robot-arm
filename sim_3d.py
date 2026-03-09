@@ -150,7 +150,7 @@ class RobotArmSim:
         self.j2_vis = Entity(parent=self.joint2, model='cube', color=color_orange, scale=(0.4, 0.2, 0.4), rotation_x=90, unlit=True)
         
         # Link 3 visual: Antebrazo (Menta). Unlit.
-        self.link3_vis = Entity(parent=self.joint2, model='cylinder', color=color_mint, scale=(0.2, 0.8, 0.2), y=0.4, collider='box', unlit=True)
+        self.link3_vis = Entity(parent=self.joint2, model=Cylinder(resolution=16), color=color_mint, scale=(0.2, 0.8, 0.2), y=0, collider='box', unlit=True)
         
         # Pinza (Gripper) visual al final del antebrazo - Unlit.
         # Lo rotamos para que mire hacia adelante (eje Z local de la muñeca) en lugar de hacia arriba
@@ -242,7 +242,7 @@ class RobotArmSim:
         if shape == "box":
             Entity(model='cube', scale=size, color=color.random_color(), position=(2, 3, 0), collider='box')
         elif shape == "cylinder":
-            Entity(model='cylinder', scale=size, color=color.random_color(), position=(2, 3, 0), collider='mesh')
+            Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=(2, 3, 0), collider='mesh')
 
     def update(self):
         # Recibir mensajes de control de la GUI principal.
