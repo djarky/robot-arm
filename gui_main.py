@@ -762,37 +762,39 @@ class RobotGui(QMainWindow):
             
         target = self.current_interp_sequence[self.current_seq_index]
         self.target_angles = target["angles"]
-        duration = target["duration"]
+        duration = max(target["duration"], 0.05)  # Mínimo 50ms para evitar división por cero
         
-        # FPS sim para interpolación (ej: 30 fps)
+        # FPS sim para interpolación
         fps = 30
-        self.interp_steps = int(duration * fps)
+        self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
         
-        current_angles = [s.value() for s in self.sliders]
+        # Guardar posición actual como flotantes para acumulación precisa
+        self.current_angles_f = [float(s.value()) for s in self.sliders]
         self.interp_deltas = [
-            (self.target_angles[i] - current_angles[i]) / self.interp_steps
+            (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
             for i in range(3)
         ]
         
-        self.interp_timer.start(int(1000/fps))
+        self.interp_timer.start(int(1000 / fps))
 
     def update_interpolation(self):
         self.interp_count += 1
         if self.interp_count <= self.interp_steps:
+            # Acumular en flotantes para evitar error de redondeo acumulado
             for i in range(3):
-                # Usar float temporal para precisión si fuera necesario, 
-                # pero los sliders son int. Hacemos casting.
-                new_val = self.sliders[i].value() + self.interp_deltas[i]
+                self.current_angles_f[i] += self.interp_deltas[i]
                 self.sliders[i].blockSignals(True)
-                self.sliders[i].setValue(int(new_val))
+                self.sliders[i].setValue(int(round(self.current_angles_f[i])))
                 self.sliders[i].blockSignals(False)
-            self.send_angles() # Enviar a sim y hardware
+            self.send_angles()
         else:
             self.interp_timer.stop()
-            # Asegurar valor exacto al final
+            # Asegurar valor exacto al final (sin error de redondeo)
             for i in range(3):
+                self.sliders[i].blockSignals(True)
                 self.sliders[i].setValue(self.target_angles[i])
+                self.sliders[i].blockSignals(False)
             self.send_angles()
             
             self.current_seq_index += 1
