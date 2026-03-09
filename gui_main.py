@@ -14,7 +14,7 @@ class PoseWidget(QFrame):
     def __init__(self, pose_name, thumb_path, parent=None, show_delete=True):
         super().__init__(parent)
         self.pose_name = pose_name
-        self.setFixedSize(100, 110)
+        self.setFixedSize(85, 110) # Reducido aún más para asegurar 2 columnas
         self.setStyleSheet("QFrame { background-color: #333; border-radius: 5px; border: 1px solid #555; } QFrame:hover { border: 1px solid #2196F3; }")
         
         layout = QVBoxLayout(self)
@@ -207,12 +207,20 @@ class RobotGui(QMainWindow):
         sim_layout.setStretch(3, 0) # Button Layout
         
         self.sim_panel.setLayout(sim_layout)
-        self.main_layout.addWidget(self.sim_panel, 8) # Aumentado el peso de la simulación
+        self.main_layout.addWidget(self.sim_panel, 7) # Ajustado para mayor compatibilidad de grid
 
-        # Right Panel: Camera and Controls
+        # Right Panel: Camera and Controls (con Scroll Area)
+        self.right_scroll = QScrollArea()
+        self.right_scroll.setWidgetResizable(True)
+        self.right_scroll.setFrameShape(QFrame.NoFrame)
+        self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
         self.right_panel = QWidget()
         self.right_layout = QVBoxLayout(self.right_panel)
-        self.main_layout.addWidget(self.right_panel, 2) # Reducido el peso del panel derecho
+        self.right_layout.setContentsMargins(5, 5, 5, 5)
+        self.right_scroll.setWidget(self.right_panel)
+        
+        self.main_layout.addWidget(self.right_scroll, 3) # Panel derecho con 30% de ancho
 
         self.setup_camera_panel()
         self.setup_control_panel()
@@ -376,9 +384,14 @@ class RobotGui(QMainWindow):
         pose_layout = QVBoxLayout()
         
         self.pose_list = QListWidget()
-        self.pose_list.setIconSize(QSize(100, 110))
-        self.pose_list.setSpacing(5)
-        self.pose_list.setMinimumHeight(400)
+        self.pose_list.setViewMode(QListWidget.IconMode)
+        self.pose_list.setResizeMode(QListWidget.Adjust)
+        self.pose_list.setWrapping(True)
+        self.pose_list.setGridSize(QSize(90, 115))
+        self.pose_list.setSpacing(2)
+        self.pose_list.setMinimumHeight(225)
+        self.pose_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.pose_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pose_list.itemDoubleClicked.connect(self.load_pose_item)
         self.pose_list.setSelectionMode(QListWidget.SingleSelection)
         
@@ -398,6 +411,8 @@ class RobotGui(QMainWindow):
         # Connection Group (Hardware)
         conn_group = QGroupBox("Hardware")
         conn_layout = QVBoxLayout()
+        
+        self.right_layout.addStretch() # Asegura que los grupos no floten si hay espacio
 
         
         port_layout = QHBoxLayout()
@@ -541,7 +556,7 @@ class RobotGui(QMainWindow):
             # Crear item y su widget custom
             item = QListWidgetItem(self.pose_list)
             item.setText(name)
-            item.setSizeHint(QSize(110, 120))
+            item.setSizeHint(QSize(90, 115))
             
             widget = PoseWidget(name, thumb_path, show_delete=False)
             # Para que el doble click funcione en el widget, lo hacemos transparente a eventos o lo manejamos
