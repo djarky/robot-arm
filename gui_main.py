@@ -157,6 +157,10 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.interp_deltas = [0, 0, 0]
         self.current_angles_f = [0.0, 0.0, 0.0]
 
+        # Camera smoothing state
+        self.smooth_camera_angles = [0.0, 0.0, 0.0]
+        self.camera_active_last_frame = False
+
     # ------------------------------------------------------------------
     # Panel builders
     # ------------------------------------------------------------------
@@ -311,61 +315,104 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
             self.camera_active = False
 
     def update_image(self, frame, pose_landmarks_list, hand_landmarks_list):
-        """Process a camera frame, run angle estimation, update the preview label."""
-        h, w, _ = frame.shape
-        base_angle = 0
-        shoulder_angle = 0
-        elbow_angle = 0
-
-        # --- Pose landmarks → shoulder & elbow angles ---
+        """Process a camera frame with smoothing and visibility validation."""
+        h_f, w_f, _ = frame.shape
+        
+        # Default angles if no detection
+        base_angle = self.smooth_camera_angles[0]
+        shoulder_angle = self.smooth_camera_angles[1]
+        elbow_angle = self.smooth_camera_angles[2]
+        
+        arm_visible = False
+        low_visibility = False
+        
         if pose_landmarks_list:
             for pose_lms in pose_landmarks_list:
                 try:
-                    shoulder = pose_lms[12]
-                    elbow = pose_lms[14]
-                    wrist = pose_lms[16]
-
+                    # MediaPipe Landmarks: 12=R shoulder, 14=R elbow, 16=R wrist
+                    j_shoulder = pose_lms[12]
+                    j_elbow = pose_lms[14]
+                    j_wrist = pose_lms[16]
+                    
+                    # 1. Validation: Verify visibility/confidence
+                    threshold = 0.5
+                    if (j_shoulder.visibility < threshold or 
+                        j_elbow.visibility < threshold or 
+                        j_wrist.visibility < threshold):
+                        low_visibility = True
+                        continue
+                    
+                    arm_visible = True
+                    
+                    # Drawing skeletal landmarks
                     pts = []
-                    for lm in [shoulder, elbow, wrist]:
-                        cx, cy = int(lm.x * w), int(lm.y * h)
+                    for lm in [j_shoulder, j_elbow, j_wrist]:
+                        cx, cy = int(lm.x * w_f), int(lm.y * h_f)
                         pts.append((cx, cy))
-                        cv2.circle(frame, (cx, cy), 5, (0, 255, 0), cv2.FILLED)
-                    cv2.line(frame, pts[0], pts[1], (255, 0, 0), 2)
-                    cv2.line(frame, pts[1], pts[2], (255, 0, 0), 2)
+                        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), cv2.FILLED)
+                    cv2.line(frame, pts[0], pts[1], (255, 255, 0), 2)
+                    cv2.line(frame, pts[1], pts[2], (255, 255, 0), 2)
 
-                    v1 = np.array([elbow.x - shoulder.x, elbow.y - shoulder.y])
+                    # --- Angle Calculations ---
+                    # Shoulder (Joint 1)
+                    v1 = np.array([j_elbow.x - j_shoulder.x, j_elbow.y - j_shoulder.y])
                     v_up = np.array([0, -1])
                     unit_v1 = v1 / (np.linalg.norm(v1) + 1e-6)
-                    shoulder_angle = int(
-                        np.degrees(np.arccos(np.clip(np.dot(unit_v1, v_up), -1.0, 1.0))) - 90
-                    )
+                    target_shoulder = int(np.degrees(np.arccos(np.clip(np.dot(unit_v1, v_up), -1.0, 1.0))) - 90)
 
-                    v_arm = np.array([shoulder.x - elbow.x, shoulder.y - elbow.y])
-                    v_forearm = np.array([wrist.x - elbow.x, wrist.y - elbow.y])
+                    # Elbow (Joint 2)
+                    v_arm = np.array([j_shoulder.x - j_elbow.x, j_shoulder.y - j_elbow.y])
+                    v_forearm = np.array([j_wrist.x - j_elbow.x, j_wrist.y - j_elbow.y])
                     unit_arm = v_arm / (np.linalg.norm(v_arm) + 1e-6)
                     unit_forearm = v_forearm / (np.linalg.norm(v_forearm) + 1e-6)
-                    elbow_angle = int(
-                        180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0)))
-                    )
+                    target_elbow = int(180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0))))
 
-                    # Base (Joint 0) - Mapeo vertical "Torso como Piso"
-                    # Si el brazo está hacia arriba (wrist.y < shoulder.y), tiende a -90
-                    # Si el brazo está hacia abajo (wrist.y > shoulder.y), tiende a 90
-                    dy_normalized = (wrist.y - shoulder.y) * 2  # Escalar para mayor sensibilidad
-                    base_angle = int(np.clip(dy_normalized * 90, -90, 90))
-                except Exception:
-                    pass
+                    # Base (Joint 0) - "Torso como Piso"
+                    dy_normalized = (j_wrist.y - j_shoulder.y) * 2
+                    target_base = int(np.clip(dy_normalized * 90, -90, 90))
 
-        if pose_landmarks_list:
-            self.send_camera_angles([
-                max(-180, min(180, base_angle)),
-                max(-180, min(180, shoulder_angle)),
-                max(-180, min(180, elbow_angle)),
-            ])
-            cv2.putText(
-                frame, f"Base (Pose): {base_angle}",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
-            )
+                    # --- Smoothing & Protection ---
+                    MAX_STEP = 10.0
+                    EMA_ALPHA = 0.2
+                    targets = [target_base, target_shoulder, target_elbow]
+                    
+                    if not self.camera_active_last_frame:
+                         self.smooth_camera_angles = [float(t) for t in targets]
+                         self.camera_active_last_frame = True
+
+                    for i in range(3):
+                        diff = targets[i] - self.smooth_camera_angles[i]
+                        step = np.clip(diff, -MAX_STEP, MAX_STEP)
+                        self.smooth_camera_angles[i] = (self.smooth_camera_angles[i] + step) * EMA_ALPHA + \
+                                                       self.smooth_camera_angles[i] * (1 - EMA_ALPHA)
+
+                    base_angle, shoulder_angle, elbow_angle = [int(a) for a in self.smooth_camera_angles]
+                    
+                except Exception as e:
+                    print(f"Error en calculo de angulos: {e}")
+
+        # --- High Visibility Status Overlay ---
+        # 1. Dark banner at top
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w_f, 45), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+        if arm_visible:
+            status_msg = "SEGUIMIENTO ACTIVO"
+            status_color = (0, 255, 0) # Green
+            self.send_camera_angles([base_angle, shoulder_angle, elbow_angle])
+        elif low_visibility:
+            status_msg = "BAJA VISIBILIDAD"
+            status_color = (0, 165, 255) # Orange (BGR)
+            self.camera_active_last_frame = False
+        else:
+            status_msg = "BRAZO NO DETECTADO"
+            status_color = (0, 0, 255) # Red
+            self.camera_active_last_frame = False
+
+        # Draw status text
+        cv2.putText(frame, status_msg, (15, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+
 
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
