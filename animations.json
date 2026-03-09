@@ -1,0 +1,42 @@
+{
+    "unos": [
+        {
+            "pose": "1",
+            "duration": 0.5
+        },
+        {
+            "pose": "2",
+            "duration": 6.0
+        },
+        {
+            "pose": "3",
+            "duration": 10.0
+        },
+        {
+            "pose": "5",
+            "duration": 0.1
+        }
+    ],
+    "dos": [
+        {
+            "pose": "1",
+            "duration": 0.5
+        },
+        {
+            "pose": "2",
+            "duration": 4.0
+        },
+        {
+            "pose": "1",
+            "duration": 1.0
+        },
+        {
+            "pose": "2",
+            "duration": 8.0
+        },
+        {
+            "pose": "1",
+            "duration": 3.0
+        }
+    ]
+}
