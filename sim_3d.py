@@ -91,9 +91,9 @@ class CircularSlider(Entity):
         if self.dragging:
             delta = mouse.velocity[0] + mouse.velocity[1]
             if self.axis == 'y':
-                self.target.rotation_y += delta * 500
+                self.target.rotation_y = max(-90, min(90, self.target.rotation_y + delta * 500))
             else:
-                self.target.rotation_x -= delta * 500
+                self.target.rotation_x = max(-90, min(90, self.target.rotation_x - delta * 500))
             
             if hasattr(scene, 'sim_instance'):
                 scene.sim_instance.sync_to_gui()
@@ -263,12 +263,10 @@ class RobotArmSim:
                 if msg.get("type") == "angles":
                     self.angles = msg["data"]
                     # Aplicar ángulos recibidos a las rotaciones locales (sobrescribe la entrada del ratón)
-                    # Joint 0 es la base (rotación alrededor del eje Y global/paralelo)
-                    self.joint0.rotation_y = self.angles[0]
-                    # Joint 1 es el hombro (baja y sube, rotación en X). Invertido visualmente si es necesario
-                    self.joint1.rotation_x = -self.angles[1]
-                    # Joint 2 es el codo
-                    self.joint2.rotation_x = -self.angles[2]
+                    # Clampeamos a -90, 90
+                    self.joint0.rotation_y = max(-90, min(90, self.angles[0]))
+                    self.joint1.rotation_x = -max(-90, min(90, self.angles[1]))
+                    self.joint2.rotation_x = -max(-90, min(90, self.angles[2]))
                 elif msg.get("type") == "spawn":
                     self.spawn_object(msg["shape"], msg["size"], msg["mass"])
                 elif msg.get("type") == "reset_camera":
@@ -316,11 +314,11 @@ class RobotArmSim:
         if self.rotation_mode:
             delta = mouse.velocity[0] * 200
             if self.selected_joint == 0:
-                self.joint0.rotation_y += delta
+                self.joint0.rotation_y = max(-90, min(90, self.joint0.rotation_y + delta))
             elif self.selected_joint == 1:
-                self.joint1.rotation_x -= delta
+                self.joint1.rotation_x = max(-90, min(90, self.joint1.rotation_x - delta))
             elif self.selected_joint == 2:
-                self.joint2.rotation_x -= delta
+                self.joint2.rotation_x = max(-90, min(90, self.joint2.rotation_x - delta))
             
             self.sync_to_gui()
             
@@ -331,10 +329,10 @@ class RobotArmSim:
         # para no interferir con la EditorCamera por defecto.
         if held_keys['shift']:
             if mouse.left:
-                self.joint0.rotation_y += mouse.velocity[0] * 100
-                self.joint1.rotation_x -= mouse.velocity[1] * 100
+                self.joint0.rotation_y = max(-90, min(90, self.joint0.rotation_y + mouse.velocity[0] * 100))
+                self.joint1.rotation_x = max(-90, min(90, self.joint1.rotation_x - mouse.velocity[1] * 100))
             elif mouse.right:
-                self.joint2.rotation_x -= mouse.velocity[1] * 100
+                self.joint2.rotation_x = max(-90, min(90, self.joint2.rotation_x - mouse.velocity[1] * 100))
             self.sync_to_gui()
         
         # Guardar posición de cámara cada 5 segundos si ha cambiado notablemente

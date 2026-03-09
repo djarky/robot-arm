@@ -371,7 +371,7 @@ class RobotGui(QMainWindow):
         self.sliders = []
         for i in range(3):
             s = QSlider(Qt.Horizontal)
-            s.setRange(-180, 180)
+            s.setRange(-90, 90)
             s.setValue(0)
             s.valueChanged.connect(self.send_angles)
             joint_layout.addRow(f"J{i}:", s)
