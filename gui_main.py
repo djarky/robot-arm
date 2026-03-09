@@ -172,7 +172,7 @@ class RobotGui(QMainWindow):
         
         self.sim_container = QWidget()
         self.sim_container.setStyleSheet("background-color: black;")
-        self.sim_container.setMinimumSize(600, 400)
+        self.sim_container.setMinimumSize(600, 200)  # Reducido para ceder espacio al timeline
         
         button_layout = QHBoxLayout()
         self.btn_launch_sim = QPushButton("Lanzar Simulación 3D (Ursina)")
@@ -244,6 +244,11 @@ class RobotGui(QMainWindow):
             os.makedirs(self.pose_icons_dir)
         self.load_poses_data()
 
+        # Animation Sequences Data
+        self.animations_file = "animations.json"
+        self.saved_animations = {} # { "Anim Name": [{pose, duration}, ...] }
+        self.load_animations_data()
+
         # Interpolation Engine
         self.interp_timer = QTimer()
         self.interp_timer.timeout.connect(self.update_interpolation)
@@ -279,14 +284,40 @@ class RobotGui(QMainWindow):
         tl_main_vbox.setContentsMargins(5, 2, 5, 5)
         tl_main_vbox.setSpacing(0)
         
-        # Header con botone de colapsar
+        # Header con botón de colapsar + selector de animaciones (una sola línea)
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        self.btn_toggle_tl = QPushButton("▼") # Flecha hacia abajo (abierto)
+        header_layout.setSpacing(4)
+
+        self.btn_toggle_tl = QPushButton("▼")
         self.btn_toggle_tl.setFixedSize(30, 20)
         self.btn_toggle_tl.clicked.connect(self.toggle_timeline)
         header_layout.addWidget(self.btn_toggle_tl)
-        header_layout.addStretch()
+
+        header_layout.addWidget(QLabel("Anim:"))
+
+        self.anim_selector = QComboBox()
+        self.anim_selector.setMinimumWidth(100)
+        self.anim_selector.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        header_layout.addWidget(self.anim_selector)
+
+        self.btn_save_anim = QPushButton("Guardar")
+        self.btn_save_anim.setFixedWidth(58)
+        self.btn_save_anim.setStyleSheet("background-color: #388E3C; color: white; font-size: 11px;")
+        self.btn_save_anim.clicked.connect(self.save_animation)
+        header_layout.addWidget(self.btn_save_anim)
+
+        self.btn_load_anim = QPushButton("Cargar")
+        self.btn_load_anim.setFixedWidth(52)
+        self.btn_load_anim.setStyleSheet("background-color: #1976D2; color: white; font-size: 11px;")
+        self.btn_load_anim.clicked.connect(self.load_animation)
+        header_layout.addWidget(self.btn_load_anim)
+
+        self.btn_del_anim = QPushButton("Del")
+        self.btn_del_anim.setFixedWidth(36)
+        self.btn_del_anim.setStyleSheet("background-color: #c62828; color: white; font-size: 11px;")
+        self.btn_del_anim.clicked.connect(self.delete_animation)
+        header_layout.addWidget(self.btn_del_anim)
         
         # Contenedor de TODO el contenido del timeline (el que se oculta)
         self.tl_container_widget = QWidget()
@@ -337,16 +368,10 @@ class RobotGui(QMainWindow):
         is_visible = self.tl_container_widget.isVisible()
         self.tl_container_widget.setVisible(not is_visible)
         self.btn_toggle_tl.setText("▲" if is_visible else "▼")
-        
-        if is_visible:
-            # Colapsado
-            self.timeline_group.setMaximumHeight(50)
-        else:
-            # Expandido
-            self.timeline_group.setMaximumHeight(250)
-            
-        # Forzar al layout a auto-acomodarse
-        self.main_layout.activate()
+        # Qt redistribuye el espacio automáticamente al cambiar la visibilidad.
+        # Solo necesitamos que el layout padre recalcule.
+        self.sim_panel.layout().invalidate()
+        self.sim_panel.layout().activate()
 
     def setup_camera_panel(self):
         group = QGroupBox("Camera Tracking")
@@ -629,6 +654,78 @@ class RobotGui(QMainWindow):
             self.tl_layout.removeWidget(w)
             w.deleteLater()
         self.timeline_widgets = []
+
+    # --- ANIMATION SYSTEM ---
+    def load_animations_data(self):
+        if os.path.exists(self.animations_file):
+            try:
+                with open(self.animations_file, "r") as f:
+                    self.saved_animations = json.load(f)
+                self._refresh_anim_selector()
+            except: pass
+
+    def _refresh_anim_selector(self):
+        self.anim_selector.clear()
+        for name in self.saved_animations:
+            self.anim_selector.addItem(name)
+
+    def save_animation(self):
+        # Construir la secuencia actual desde el timeline
+        sequence = []
+        for i, w in enumerate(self.timeline_widgets):
+            if isinstance(w, PoseWidget):
+                duration = 0.5
+                if i > 0 and isinstance(self.timeline_widgets[i-1], TimeConnectorWidget):
+                    duration = self.timeline_widgets[i-1].time_input.value()
+                sequence.append({"pose": w.pose_name, "duration": duration})
+
+        if not sequence:
+            return
+
+        name, ok = QInputDialog.getText(self, "Guardar Animación", "Nombre de la animación:")
+        if ok and name:
+            self.saved_animations[name] = sequence
+            with open(self.animations_file, "w") as f:
+                json.dump(self.saved_animations, f, indent=4)
+            self._refresh_anim_selector()
+            # Seleccionar la recién guardada
+            idx = self.anim_selector.findText(name)
+            if idx >= 0:
+                self.anim_selector.setCurrentIndex(idx)
+
+    def load_animation(self):
+        name = self.anim_selector.currentText()
+        if not name or name not in self.saved_animations:
+            return
+
+        self.clear_visual_timeline()
+        sequence = self.saved_animations[name]
+
+        for i, step in enumerate(sequence):
+            pose_name = step.get("pose", "")
+            duration = step.get("duration", 2.0)
+
+            # Conector de tiempo si no es el primero
+            if self.timeline_widgets:
+                conn = TimeConnectorWidget()
+                conn.time_input.setValue(duration)
+                self.tl_layout.addWidget(conn)
+                self.timeline_widgets.append(conn)
+
+            # Widget de pose
+            thumb_path = os.path.join(self.pose_icons_dir, f"{pose_name}.png")
+            step_widget = PoseWidget(pose_name, thumb_path, show_delete=True)
+            step_widget.btn_del.clicked.connect(lambda checked=False, sw=step_widget: self.remove_from_timeline(sw))
+            self.tl_layout.addWidget(step_widget)
+            self.timeline_widgets.append(step_widget)
+
+    def delete_animation(self):
+        name = self.anim_selector.currentText()
+        if name and name in self.saved_animations:
+            del self.saved_animations[name]
+            with open(self.animations_file, "w") as f:
+                json.dump(self.saved_animations, f, indent=4)
+            self._refresh_anim_selector()
 
     def play_sequence(self):
         # Convertir timeline widgets a lista de poses/tiempos
