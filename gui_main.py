@@ -337,8 +337,12 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         arm_visible = False
         low_confidence = False
         
+        # Check if animation is currently playing
+        # If playing, we skip logic layer to prevent fighting with the interpolation engine
+        is_playing = self.interp_timer.isActive()
+        
         # 1. Logic Layer: Extract data
-        if pose_landmarks_list:
+        if not is_playing and pose_landmarks_list:
             for pose_lms in pose_landmarks_list:
                 try:
                     j_shoulder = pose_lms[12]
@@ -400,10 +404,25 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
                     print(f"Error procesando frame: {e}")
 
         # --- 3. UI Status Update (External Label) ---
-        if arm_visible:
+        if is_playing:
+            status_msg = "SISTEMA: REPRODUCIENDO ANIMACIÓN"
+            status_style = "background-color: #fbc02d; color: #000000; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
+            self.camera_active_last_frame = False
+        elif arm_visible:
             status_msg = "SISTEMA: SEGUIMIENTO ACTIVO"
             status_style = "background-color: #1b5e20; color: #ffffff; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
-            self.send_camera_angles([base_angle, shoulder_angle, elbow_angle])
+            
+            # Forward camera angles directly to the manual sliders.
+            # We block signals temporarily to avoid causing an infinite feedback loop during this block,
+            # but we explicitly call send_angles to push the state to BOTH Sim and Arduino.
+            angles = [base_angle, shoulder_angle, elbow_angle]
+            for i, angle in enumerate(angles):
+                if i < len(self.sliders):
+                    self.sliders[i].blockSignals(True)
+                    self.sliders[i].setValue(angle)
+                    self.sliders[i].blockSignals(False)
+            self.send_angles()
+            
         elif low_confidence:
             status_msg = "SISTEMA: BAJA CONFIANZA"
             status_style = "background-color: #e65100; color: #ffffff; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
