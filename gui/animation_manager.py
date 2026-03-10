@@ -129,6 +129,8 @@ class AnimationManagerMixin:
         self.tl_container_layout.addWidget(self.tl_scroll)
         self.tl_container_layout.addWidget(self.tl_side_controls)
 
+        self.tl_container_widget.hide()  # Minimize by default
+
         tl_main_vbox.addLayout(header_layout)
         tl_main_vbox.addWidget(self.tl_container_widget)
 

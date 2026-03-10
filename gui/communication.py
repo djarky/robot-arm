@@ -92,16 +92,20 @@ class CommunicationMixin:
     # ------------------------------------------------------------------
 
     def refresh_ports(self):
-        """Populate the port selector combo with available serial ports."""
+        """Populate the port selector combo with available serial ports, filtered for Arduino."""
         self.port_selector.clear()
-        ports = serial.tools.list_ports.comports()
-        for port in ports:
+        all_ports = serial.tools.list_ports.comports()
+        
+        # Filter for typical Arduino names on Linux: ttyUSB* or ttyACM*
+        filtered_ports = [p for p in all_ports if "ttyUSB" in p.device or "ttyACM" in p.device]
+        
+        for port in filtered_ports:
             self.port_selector.addItem(port.device)
 
-        if not ports:
-            self.conn_status.setText("No ports found")
+        if not filtered_ports:
+            self.conn_status.setText("No compatible ports found")
         else:
-            self.conn_status.setText(f"Found {len(ports)} ports")
+            self.conn_status.setText(f"Found {len(filtered_ports)} compatible ports")
 
     def toggle_serial(self):
         """Connect or disconnect the Arduino serial port."""
