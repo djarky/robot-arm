@@ -90,6 +90,11 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.btn_launch_sim.clicked.connect(self.launch_simulation)
         self.btn_reset_cam = QPushButton("Reset View")
         self.btn_reset_cam.clicked.connect(self.reset_camera_sim)
+        
+        self.playback_mode = QComboBox()
+        self.playback_mode.addItems(["Una Vez", "Bucle", "Ping-Pong"])
+        self.playback_mode.setToolTip("Modo de repetición de la animación")
+        
         self.btn_play_seq = QPushButton("▶ REPRODUCIR SECUENCIA")
         self.btn_play_seq.setStyleSheet(
             "background-color: #4CAF50; color: white; font-weight: bold; padding: 5px;"
@@ -98,6 +103,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
 
         button_layout.addWidget(self.btn_launch_sim)
         button_layout.addWidget(self.btn_reset_cam)
+        button_layout.addWidget(self.playback_mode)
         button_layout.addWidget(self.btn_play_seq)
 
         sim_layout.addLayout(button_layout)
@@ -158,6 +164,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.interp_count = 0
         self.interp_deltas = [0, 0, 0]
         self.current_angles_f = [0.0, 0.0, 0.0]
+        self.playback_direction = 1
 
         # Camera smoothing state
         self.smooth_camera_angles = [0.0, 0.0, 0.0]

@@ -160,39 +160,64 @@ class AnimationManagerMixin:
         pose_name = item.data(Qt.UserRole)
         thumb_path = os.path.join(self.pose_icons_dir, f"{pose_name}.png")
 
-        if self.timeline_widgets:
-            conn = TimeConnectorWidget()
-            self.tl_layout.addWidget(conn)
-            self.timeline_widgets.append(conn)
+        if not self.timeline_widgets:
+            conn_start = TimeConnectorWidget(arrow_text="▶")
+            self.tl_layout.addWidget(conn_start)
+            self.timeline_widgets.append(conn_start)
 
-        step = PoseWidget(pose_name, thumb_path, show_delete=True)
-        step.btn_del.clicked.connect(lambda: self.remove_from_timeline(step))
-        self.tl_layout.addWidget(step)
-        self.timeline_widgets.append(step)
+            step = PoseWidget(pose_name, thumb_path, show_delete=True)
+            step.btn_del.clicked.connect(lambda checked=False, sw=step: self.remove_from_timeline(sw))
+            self.tl_layout.addWidget(step)
+            self.timeline_widgets.append(step)
+
+            conn_end = TimeConnectorWidget(arrow_text="↺")
+            self.tl_layout.addWidget(conn_end)
+            self.timeline_widgets.append(conn_end)
+        else:
+            conn_new = TimeConnectorWidget(arrow_text="→")
+            step = PoseWidget(pose_name, thumb_path, show_delete=True)
+            step.btn_del.clicked.connect(lambda checked=False, sw=step: self.remove_from_timeline(sw))
+
+            # Remove end connector temporarily
+            conn_end = self.timeline_widgets.pop()
+            self.tl_layout.removeWidget(conn_end)
+
+            self.tl_layout.addWidget(conn_new)
+            self.timeline_widgets.append(conn_new)
+
+            self.tl_layout.addWidget(step)
+            self.timeline_widgets.append(step)
+
+            self.tl_layout.addWidget(conn_end)
+            self.timeline_widgets.append(conn_end)
 
     def remove_from_timeline(self, widget):
-        """Remove a pose step (and its adjacent connector) from the timeline."""
+        """Remove a pose step (and its preceding connector) from the timeline."""
         if widget not in self.timeline_widgets:
             return
+        
+        if len(self.timeline_widgets) <= 3:
+            # Only start, pose, end remaining. Clear all.
+            self.clear_visual_timeline()
+            return
+            
         idx = self.timeline_widgets.index(widget)
 
-        # Remove the preceding connector, or the following one if first item
-        if idx > 0 and isinstance(self.timeline_widgets[idx - 1], TimeConnectorWidget):
-            self.tl_layout.removeWidget(self.timeline_widgets[idx - 1])
-            self.timeline_widgets[idx - 1].deleteLater()
-            self.timeline_widgets.pop(idx - 1)
-            idx -= 1
-        elif (
-            idx < len(self.timeline_widgets) - 1
-            and isinstance(self.timeline_widgets[idx + 1], TimeConnectorWidget)
-        ):
-            self.tl_layout.removeWidget(self.timeline_widgets[idx + 1])
-            self.timeline_widgets[idx + 1].deleteLater()
-            self.timeline_widgets.pop(idx + 1)
+        # Remove the preceding connector
+        conn_to_remove = self.timeline_widgets[idx - 1]
+        self.tl_layout.removeWidget(conn_to_remove)
+        conn_to_remove.deleteLater()
+        self.timeline_widgets.pop(idx - 1)
+        idx -= 1
 
+        # Remove the pose
         self.tl_layout.removeWidget(widget)
         widget.deleteLater()
         self.timeline_widgets.pop(idx)
+        
+        # Ensure the first connector always has the start arrow
+        if self.timeline_widgets:
+            self.timeline_widgets[0].arrow.setText("▶")
 
     def clear_visual_timeline(self):
         """Remove all items from the visual timeline."""
@@ -228,13 +253,14 @@ class AnimationManagerMixin:
         sequence = []
         for i, w in enumerate(self.timeline_widgets):
             if isinstance(w, PoseWidget):
-                duration = 0.5
-                if i > 0 and isinstance(self.timeline_widgets[i - 1], TimeConnectorWidget):
-                    duration = self.timeline_widgets[i - 1].time_input.value()
+                duration = self.timeline_widgets[i - 1].time_input.value()
                 sequence.append({"pose": w.pose_name, "duration": duration})
 
         if not sequence:
             return
+            
+        if self.timeline_widgets and isinstance(self.timeline_widgets[-1], TimeConnectorWidget):
+            sequence.append({"pose": None, "duration": self.timeline_widgets[-1].time_input.value()})
 
         name, ok = QInputDialog.getText(self, "Guardar Animación", "Nombre de la animación:")
         if ok and name:
@@ -256,22 +282,47 @@ class AnimationManagerMixin:
         sequence = self.saved_animations[name]
 
         for step in sequence:
-            pose_name = step.get("pose", "")
+            pose_name = step.get("pose")
             duration = step.get("duration", 2.0)
-
-            if self.timeline_widgets:
-                conn = TimeConnectorWidget()
-                conn.time_input.setValue(duration)
-                self.tl_layout.addWidget(conn)
-                self.timeline_widgets.append(conn)
+            
+            if pose_name is None:
+                if self.timeline_widgets and isinstance(self.timeline_widgets[-1], TimeConnectorWidget):
+                    self.timeline_widgets[-1].time_input.setValue(duration)
+                continue
 
             thumb_path = os.path.join(self.pose_icons_dir, f"{pose_name}.png")
-            step_widget = PoseWidget(pose_name, thumb_path, show_delete=True)
-            step_widget.btn_del.clicked.connect(
-                lambda checked=False, sw=step_widget: self.remove_from_timeline(sw)
-            )
-            self.tl_layout.addWidget(step_widget)
-            self.timeline_widgets.append(step_widget)
+            
+            if not self.timeline_widgets:
+                conn_start = TimeConnectorWidget(arrow_text="▶")
+                conn_start.time_input.setValue(duration)
+                self.tl_layout.addWidget(conn_start)
+                self.timeline_widgets.append(conn_start)
+
+                step_w = PoseWidget(pose_name, thumb_path, show_delete=True)
+                step_w.btn_del.clicked.connect(lambda checked=False, sw=step_w: self.remove_from_timeline(sw))
+                self.tl_layout.addWidget(step_w)
+                self.timeline_widgets.append(step_w)
+
+                conn_end = TimeConnectorWidget(arrow_text="↺")
+                self.tl_layout.addWidget(conn_end)
+                self.timeline_widgets.append(conn_end)
+            else:
+                conn_new = TimeConnectorWidget(arrow_text="→")
+                conn_new.time_input.setValue(duration)
+                step_w = PoseWidget(pose_name, thumb_path, show_delete=True)
+                step_w.btn_del.clicked.connect(lambda checked=False, sw=step_w: self.remove_from_timeline(sw))
+
+                conn_end = self.timeline_widgets.pop()
+                self.tl_layout.removeWidget(conn_end)
+
+                self.tl_layout.addWidget(conn_new)
+                self.timeline_widgets.append(conn_new)
+
+                self.tl_layout.addWidget(step_w)
+                self.timeline_widgets.append(step_w)
+
+                self.tl_layout.addWidget(conn_end)
+                self.timeline_widgets.append(conn_end)
 
     def delete_animation(self):
         """Delete the currently selected animation from disk and selector."""
@@ -286,37 +337,85 @@ class AnimationManagerMixin:
     # Interpolation playback
     # ------------------------------------------------------------------
 
+    def stop_playback(self):
+        """Stop the currently running animation sequence."""
+        self.interp_timer.stop()
+        self.btn_play_seq.setText("▶ REPRODUCIR SECUENCIA")
+        self.btn_play_seq.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px;")
+
     def play_sequence(self):
         """Convert the current timeline into an interpolation sequence and start playback."""
+        if self.interp_timer.isActive():
+            self.stop_playback()
+            return
+
         self.current_interp_sequence = []
 
         for i, w in enumerate(self.timeline_widgets):
             if isinstance(w, PoseWidget):
-                pose_name = w.pose_name
-                duration = 0.5  # Default for first step (no preceding connector)
-
-                if i > 0 and isinstance(self.timeline_widgets[i - 1], TimeConnectorWidget):
-                    duration = self.timeline_widgets[i - 1].time_input.value()
-
-                if pose_name in self.saved_poses:
+                duration = self.timeline_widgets[i - 1].time_input.value()
+                if w.pose_name in self.saved_poses:
                     self.current_interp_sequence.append(
-                        {"angles": self.saved_poses[pose_name], "duration": duration}
+                        {"angles": self.saved_poses[w.pose_name], "duration": duration}
                     )
+                    
+        if self.timeline_widgets and isinstance(self.timeline_widgets[-1], TimeConnectorWidget):
+            self.loop_duration = self.timeline_widgets[-1].time_input.value()
+        else:
+            self.loop_duration = 0.5
 
         if self.current_interp_sequence:
             self.current_seq_index = 0
-            self.btn_play_seq.setEnabled(False)
+            self.playback_direction = 1
+            self.btn_play_seq.setText("⏹ DETENER SECUENCIA")
+            self.btn_play_seq.setStyleSheet("background-color: #F44336; color: white; font-weight: bold; padding: 5px;")
             self.start_next_in_sequence()
 
     def start_next_in_sequence(self):
-        """Kick off interpolation for the next step in the sequence."""
-        if self.current_seq_index >= len(self.current_interp_sequence):
-            self.btn_play_seq.setEnabled(True)
-            return
+        """Kick off interpolation for the next step in the sequence based on playback mode."""
+        mode = self.playback_mode.currentText() if hasattr(self, 'playback_mode') else "Una Vez"
+
+        if self.playback_direction == 1 and self.current_seq_index >= len(self.current_interp_sequence):
+            if mode == "Bucle":
+                self.current_seq_index = 0
+                self._next_duration_override = self.loop_duration
+            elif mode == "Ping-Pong":
+                if len(self.current_interp_sequence) > 1:
+                    self.playback_direction = -1
+                    self.current_seq_index = len(self.current_interp_sequence) - 2
+                    self._next_duration_override = self.loop_duration
+                else:
+                    self.stop_playback()
+                    return
+            else:
+                self.stop_playback()
+                return
+        elif self.playback_direction == -1 and self.current_seq_index < 0:
+            if mode == "Ping-Pong":
+                if len(self.current_interp_sequence) > 1:
+                    self.playback_direction = 1
+                    self.current_seq_index = 1
+                    self._next_duration_override = self.loop_duration
+                else:
+                    self.stop_playback()
+                    return
+            else:
+                self.stop_playback()
+                return
 
         target = self.current_interp_sequence[self.current_seq_index]
         self.target_angles = target["angles"]
-        duration = max(target["duration"], 0.05)  # Minimum 50 ms to avoid div-by-zero
+        
+        duration = getattr(self, "_next_duration_override", None)
+        if duration is None:
+            if self.playback_direction == -1 and self.current_seq_index + 1 < len(self.current_interp_sequence):
+                duration = self.current_interp_sequence[self.current_seq_index + 1]["duration"]
+            else:
+                duration = target["duration"]
+                
+        self._next_duration_override = None
+
+        duration = max(duration, 0.05)  # Minimum 50 ms to avoid div-by-zero
 
         fps = 30
         self.interp_steps = max(1, int(duration * fps))
@@ -349,5 +448,5 @@ class AnimationManagerMixin:
                 self.sliders[i].blockSignals(False)
             self.send_angles()
 
-            self.current_seq_index += 1
+            self.current_seq_index += self.playback_direction
             self.start_next_in_sequence()

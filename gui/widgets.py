@@ -62,7 +62,7 @@ class PoseWidget(QFrame):
 class TimeConnectorWidget(QWidget):
     """Widget showing duration spinner + arrow between poses in the timeline."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, arrow_text="→"):
         super().__init__(parent)
         self.setFixedWidth(60)
         layout = QVBoxLayout(self)
@@ -74,11 +74,11 @@ class TimeConnectorWidget(QWidget):
         self.time_input.setSuffix("s")
         self.time_input.setStyleSheet("font-size: 10px;")
 
-        arrow = QLabel("→")
-        arrow.setAlignment(Qt.AlignCenter)
-        arrow.setStyleSheet("font-size: 20px; color: #888;")
+        self.arrow = QLabel(arrow_text)
+        self.arrow.setAlignment(Qt.AlignCenter)
+        self.arrow.setStyleSheet("font-size: 20px; color: #888;")
 
         layout.addStretch()
         layout.addWidget(self.time_input)
-        layout.addWidget(arrow)
+        layout.addWidget(self.arrow)
         layout.addStretch()
