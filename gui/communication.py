@@ -9,6 +9,7 @@ Classes:
 import json
 import serial
 import serial.tools.list_ports
+import sys
 
 
 class CommunicationMixin:
@@ -96,8 +97,13 @@ class CommunicationMixin:
         self.port_selector.clear()
         all_ports = serial.tools.list_ports.comports()
         
-        # Filter for typical Arduino names on Linux: ttyUSB* or ttyACM*
-        filtered_ports = [p for p in all_ports if "ttyUSB" in p.device or "ttyACM" in p.device]
+        # Filter for typical Arduino names:
+        # Linux: ttyUSB* or ttyACM*
+        # Windows: COM*
+        if sys.platform == "win32":
+            filtered_ports = [p for p in all_ports if "COM" in p.device.upper()]
+        else:
+            filtered_ports = [p for p in all_ports if "ttyUSB" in p.device or "ttyACM" in p.device]
         
         for port in filtered_ports:
             self.port_selector.addItem(port.device)

@@ -134,15 +134,17 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.camera_active = False
 
         # Pose data
-        self.poses_file = "poses.json"
+        self.poses_file = os.path.join(os.getcwd(), "poses.json")
         self.saved_poses = {}
         self.pose_icons_dir = "pose_thumbnails"
         if not os.path.exists(self.pose_icons_dir):
             os.makedirs(self.pose_icons_dir)
+        
+        print(f"SISTEMA DETECTADO: {sys.platform}")
         self.load_poses_data()
 
         # Animation data
-        self.animations_file = "animations.json"
+        self.animations_file = os.path.join(os.getcwd(), "animations.json")
         self.saved_animations = {}
         self.load_animations_data()
 
@@ -438,7 +440,9 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
 
 
 if __name__ == "__main__":
-    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    if sys.platform == "linux" or sys.platform == "linux2":
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    
     app = QApplication(sys.argv)
     window = RobotGui()
     window.show()

@@ -11,6 +11,9 @@ from panda3d.core import ConfigVariableString
 if len(sys.argv) > 1:
     parent_window_id = sys.argv[1]
     # Intentar pasar el control de la ventana usando panda3d properties
+    # En Windows, a veces es necesario pasar el ID de ventana de forma distinta o usar un formato específico
+    if sys.platform == "win32":
+        print(f"Windows: Intentando anclaje a {parent_window_id}")
     ConfigVariableString("parent-window-handle", parent_window_id).setValue(parent_window_id)
     print(f"Ursina intentando anclarse a la ventana: {parent_window_id}")
 
