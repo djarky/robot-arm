@@ -195,7 +195,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
 
         self.cam_label = QLabel("Cámara desactivada")
         self.cam_label.setAlignment(Qt.AlignCenter)
-        self.cam_label.setFixedSize(200, 150)
+        self.cam_label.setFixedSize(400, 300)
         self.cam_label.setStyleSheet(
             "background-color: black; color: white; border-radius: 5px;"
         )
@@ -203,7 +203,14 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.btn_toggle_cam = QPushButton("Activar Seguimiento")
         self.btn_toggle_cam.clicked.connect(self.toggle_camera)
 
+        self.cam_status_label = QLabel("SISTEMA: DESACTIVADO")
+        self.cam_status_label.setAlignment(Qt.AlignCenter)
+        self.cam_status_label.setStyleSheet(
+            "font-weight: bold; font-size: 11px; padding: 2px; background-color: #222; color: #666; border-radius: 2px;"
+        )
+
         layout.addWidget(self.cam_label)
+        layout.addWidget(self.cam_status_label)
         layout.addWidget(self.btn_toggle_cam)
         group.setLayout(layout)
         self.right_layout.addWidget(group)
@@ -314,64 +321,54 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
             self.btn_toggle_cam.setText("Activar Cámara")
             self.camera_active = False
 
-    def update_image(self, frame, pose_landmarks_list, hand_landmarks_list):
+    def update_image(self, frame_in, pose_landmarks_list, hand_landmarks_list):
         """Process a camera frame with smoothing and visibility validation."""
+        # Force a copy to avoid race conditions with the camera thread buffer
+        frame = frame_in.copy()
         h_f, w_f, _ = frame.shape
         
-        # Default angles if no detection
+        # Default angles if no detection (persistence)
         base_angle = self.smooth_camera_angles[0]
         shoulder_angle = self.smooth_camera_angles[1]
         elbow_angle = self.smooth_camera_angles[2]
         
         arm_visible = False
-        low_visibility = False
+        low_confidence = False
         
+        # 1. Logic Layer: Extract data
         if pose_landmarks_list:
             for pose_lms in pose_landmarks_list:
                 try:
-                    # MediaPipe Landmarks: 12=R shoulder, 14=R elbow, 16=R wrist
                     j_shoulder = pose_lms[12]
                     j_elbow = pose_lms[14]
                     j_wrist = pose_lms[16]
                     
-                    # 1. Validation: Verify visibility/confidence
+                    # Validation
                     threshold = 0.5
                     if (j_shoulder.visibility < threshold or 
                         j_elbow.visibility < threshold or 
                         j_wrist.visibility < threshold):
-                        low_visibility = True
+                        low_confidence = True
                         continue
                     
                     arm_visible = True
-                    
-                    # Drawing skeletal landmarks
-                    pts = []
-                    for lm in [j_shoulder, j_elbow, j_wrist]:
-                        cx, cy = int(lm.x * w_f), int(lm.y * h_f)
-                        pts.append((cx, cy))
-                        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), cv2.FILLED)
-                    cv2.line(frame, pts[0], pts[1], (255, 255, 0), 2)
-                    cv2.line(frame, pts[1], pts[2], (255, 255, 0), 2)
 
-                    # --- Angle Calculations ---
-                    # Shoulder (Joint 1)
+                    # Calculate target angles...
                     v1 = np.array([j_elbow.x - j_shoulder.x, j_elbow.y - j_shoulder.y])
                     v_up = np.array([0, -1])
                     unit_v1 = v1 / (np.linalg.norm(v1) + 1e-6)
                     target_shoulder = int(np.degrees(np.arccos(np.clip(np.dot(unit_v1, v_up), -1.0, 1.0))) - 90)
 
-                    # Elbow (Joint 2)
                     v_arm = np.array([j_shoulder.x - j_elbow.x, j_shoulder.y - j_elbow.y])
                     v_forearm = np.array([j_wrist.x - j_elbow.x, j_wrist.y - j_elbow.y])
                     unit_arm = v_arm / (np.linalg.norm(v_arm) + 1e-6)
                     unit_forearm = v_forearm / (np.linalg.norm(v_forearm) + 1e-6)
                     target_elbow = int(180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0))))
 
-                    # Base (Joint 0) - "Torso como Piso"
                     dy_normalized = (j_wrist.y - j_shoulder.y) * 2
                     target_base = int(np.clip(dy_normalized * 90, -90, 90))
 
-                    # --- Smoothing & Protection ---
+                    # Apply smoothing
                     MAX_STEP = 10.0
                     EMA_ALPHA = 0.2
                     targets = [target_base, target_shoulder, target_elbow]
@@ -388,36 +385,40 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
 
                     base_angle, shoulder_angle, elbow_angle = [int(a) for a in self.smooth_camera_angles]
                     
+                    # 2. Drawing Layer: Skeleton (Below status bar)
+                    pts = []
+                    for lm in [j_shoulder, j_elbow, j_wrist]:
+                        cx, cy = int(lm.x * w_f), int(lm.y * h_f)
+                        pts.append((cx, cy))
+                        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), cv2.FILLED)
+                    cv2.line(frame, pts[0], pts[1], (255, 255, 0), 2)
+                    cv2.line(frame, pts[1], pts[2], (255, 255, 0), 2)
+                    
                 except Exception as e:
-                    print(f"Error en calculo de angulos: {e}")
+                    print(f"Error procesando frame: {e}")
 
-        # --- High Visibility Status Overlay ---
-        # 1. Dark banner at top
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w_f, 45), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
+        # --- 3. UI Status Update (External Label) ---
         if arm_visible:
-            status_msg = "SEGUIMIENTO ACTIVO"
-            status_color = (0, 255, 0) # Green
+            status_msg = "SISTEMA: SEGUIMIENTO ACTIVO"
+            status_style = "background-color: #1b5e20; color: #ffffff; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
             self.send_camera_angles([base_angle, shoulder_angle, elbow_angle])
-        elif low_visibility:
-            status_msg = "BAJA VISIBILIDAD"
-            status_color = (0, 165, 255) # Orange (BGR)
+        elif low_confidence:
+            status_msg = "SISTEMA: BAJA CONFIANZA"
+            status_style = "background-color: #e65100; color: #ffffff; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
             self.camera_active_last_frame = False
         else:
-            status_msg = "BRAZO NO DETECTADO"
-            status_color = (0, 0, 255) # Red
+            status_msg = "SISTEMA: NO DETECTADO"
+            status_style = "background-color: #b71c1c; color: #ffffff; font-weight: bold; font-size: 11px; padding: 2px; border-radius: 2px;"
             self.camera_active_last_frame = False
 
-        # Draw status text
-        cv2.putText(frame, status_msg, (15, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+        self.cam_status_label.setText(status_msg)
+        self.cam_status_label.setStyleSheet(status_style)
 
-
+        # Update UI
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         qt_image = QImage(rgb_image.data, w, h, ch * w, QImage.Format_RGB888)
-        self.cam_label.setPixmap(QPixmap.fromImage(qt_image.scaled(320, 240, Qt.KeepAspectRatio)))
+        self.cam_label.setPixmap(QPixmap.fromImage(qt_image.scaled(400, 300, Qt.KeepAspectRatio)))
 
     # ------------------------------------------------------------------
     # Window lifecycle
