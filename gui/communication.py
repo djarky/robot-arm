@@ -10,6 +10,8 @@ import json
 import serial
 import serial.tools.list_ports
 import sys
+import time
+from PySide6.QtCore import QTimer
 
 
 class CommunicationMixin:
@@ -114,27 +116,98 @@ class CommunicationMixin:
             self.conn_status.setText(f"Found {len(filtered_ports)} compatible ports")
 
     def toggle_serial(self):
-        """Connect or disconnect the Arduino serial port."""
+        """Connect or disconnect the Arduino serial port with verification."""
         if self.ser is None or not self.ser.is_open:
             selected_port = self.port_selector.currentText()
             if not selected_port:
-                self.conn_status.setText("Error: No port selected")
+                self.set_conn_status("Error: No port selected", "error")
                 return
             try:
-                self.ser = serial.Serial(selected_port, 115200, timeout=1)
-                self.conn_status.setText(f"Connected: {selected_port}")
-                self.btn_connect.setText("Disconnect")
-                self.port_selector.setEnabled(False)
-                self.btn_refresh.setEnabled(False)
+                # Open port
+                self.ser = serial.Serial(selected_port, 115200, timeout=0.1)
+                
+                # Handshake verification
+                if self.verify_arduino():
+                    self.set_conn_status(f"Connected: {selected_port}", "success")
+                    self.btn_connect.setText("Disconnect")
+                    self.port_selector.setEnabled(False)
+                    self.btn_refresh.setEnabled(False)
+                    # Start monitoring serial responses if not already started
+                    if not hasattr(self, 'serial_timer'):
+                        self.serial_timer = QTimer()
+                        self.serial_timer.timeout.connect(self.read_serial_feedback)
+                    self.serial_timer.start(50)
+                else:
+                    self.ser.close()
+                    self.ser = None
+                    self.set_conn_status("Error: Sketch unrecognized", "error")
+                    
+            except serial.SerialException as e:
+                self.ser = None
+                if "Device or resource busy" in str(e) or "Access is denied" in str(e):
+                    self.set_conn_status("Error: Port busy", "error")
+                else:
+                    self.set_conn_status(f"Error: {str(e)}", "error")
             except Exception as e:
-                self.conn_status.setText(f"Error: {str(e)}")
+                self.ser = None
+                self.set_conn_status(f"Error: {str(e)}", "error")
         else:
+            if hasattr(self, 'serial_timer'):
+                self.serial_timer.stop()
             self.ser.close()
             self.ser = None
-            self.conn_status.setText("Status: Disconnected")
+            self.set_conn_status("Status: Disconnected", "normal")
             self.btn_connect.setText("Connect Arduino")
             self.port_selector.setEnabled(True)
             self.btn_refresh.setEnabled(True)
+
+    def verify_arduino(self):
+        """Sends identification command and waits for response."""
+        if not self.ser or not self.ser.is_open:
+            return False
+        
+        # Clear buffers
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
+        
+        # Send query
+        self.ser.write(b"?\n")
+        
+        # Wait for response (up to 2 seconds)
+        start_time = time.time()
+        while (time.time() - start_time) < 2.0:
+            if self.ser.in_waiting > 0:
+                line = self.ser.readline().decode().strip()
+                if line == "ID:ARM_ROBOT":
+                    return True
+            time.sleep(0.1)
+        return False
+
+    def read_serial_feedback(self):
+        """Reads ACK/ERROR from Arduino to verify packet reception."""
+        if self.ser and self.ser.is_open:
+            try:
+                while self.ser.in_waiting > 0:
+                    line = self.ser.readline().decode().strip()
+                    if line == "ACK":
+                        # notify success (we can add a counter or flash a led)
+                        if hasattr(self, 'on_packet_received'):
+                            self.on_packet_received(True)
+                    elif line.startswith("ERROR"):
+                        if hasattr(self, 'on_packet_received'):
+                            self.on_packet_received(False, line)
+            except Exception as e:
+                print(f"Serial feedback error: {e}")
+
+    def set_conn_status(self, text, type="normal"):
+        """Helper to style the status label."""
+        self.conn_status.setText(text)
+        styles = {
+            "normal": "color: #ccc;",
+            "success": "color: #4CAF50; font-weight: bold;",
+            "error": "color: #f44336; font-weight: bold;"
+        }
+        self.conn_status.setStyleSheet(styles.get(type, styles["normal"]))
 
     # ------------------------------------------------------------------
     # Session config persistence

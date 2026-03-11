@@ -29,7 +29,17 @@ void setup() {
 void loop() {
   if (Serial.available() > 0) {
     String data = Serial.readStringUntil('\n');
-    parseAndControl(data);
+    data.trim(); // Remove any whitespace/newlines
+    
+    // Handshake check
+    if (data == "?") {
+      Serial.println("ID:ARM_ROBOT");
+      return;
+    }
+    
+    if (data.length() > 0) {
+      parseAndControl(data);
+    }
   }
 }
 
@@ -52,5 +62,8 @@ void parseAndControl(String data) {
     servo2.write(constrain(values[1], 0, 180));
     servo3.write(constrain(values[2], 0, 180));
     gripper.write(values[3] == 1 ? 90 : 0); // 1 = Cerrado, 0 = Abierto
+    Serial.println("ACK"); // Confirmación de procesamiento
+  } else {
+    Serial.println("ERROR:INVALID_PACKET");
   }
 }

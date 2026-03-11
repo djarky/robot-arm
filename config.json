@@ -12,9 +12,9 @@
         ]
     },
     "joint_angles": [
-        -88,
-        -27,
-        -43
+        90,
+        -90,
+        90
     ],
-    "serial_port": ""
+    "serial_port": "/dev/ttyUSB0"
 }

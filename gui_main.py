@@ -290,12 +290,29 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         self.btn_connect = QPushButton("Connect Arduino")
         self.btn_connect.clicked.connect(self.toggle_serial)
         self.conn_status = QLabel("Status: Disconnected")
+        
+        self.packet_status = QLabel("RX: --")
+        self.packet_status.setAlignment(Qt.AlignCenter)
+        self.packet_status.setStyleSheet("color: #666; font-size: 10px;")
 
         conn_layout.addLayout(port_layout)
         conn_layout.addWidget(self.btn_connect)
         conn_layout.addWidget(self.conn_status)
+        conn_layout.addWidget(self.packet_status)
         conn_group.setLayout(conn_layout)
         self.right_layout.addWidget(conn_group)
+
+    def on_packet_received(self, success, error_msg=None):
+        """Visual feedback when a packet is confirmed by Arduino."""
+        if success:
+            self.packet_status.setText("RX: OK")
+            self.packet_status.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px;")
+            # Flash effect
+            QTimer.singleShot(200, lambda: self.packet_status.setStyleSheet("color: #666; font-size: 10px;"))
+        else:
+            self.packet_status.setText(f"RX: ERR")
+            self.packet_status.setStyleSheet("color: #f44336; font-weight: bold; font-size: 10px;")
+            print(f"Arduino Error: {error_msg}")
 
     # ------------------------------------------------------------------
     # Simulation
