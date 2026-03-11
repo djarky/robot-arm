@@ -126,6 +126,10 @@ class CommunicationMixin:
                 # Open port
                 self.ser = serial.Serial(selected_port, 115200, timeout=0.1)
                 
+                # IMPORTANT: Many Arduinos reset when the serial port is opened.
+                # We need to wait for it to boot up before sending the handshake.
+                time.sleep(2.0)
+                
                 # Handshake verification
                 if self.verify_arduino():
                     self.set_conn_status(f"Connected: {selected_port}", "success")
