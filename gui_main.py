@@ -395,13 +395,15 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
                     unit_forearm = v_forearm / (np.linalg.norm(v_forearm) + 1e-6)
                     target_elbow = int(180 - np.degrees(np.arccos(np.clip(np.dot(unit_arm, unit_forearm), -1.0, 1.0))))
 
-                    dy_normalized = (j_wrist.y - j_shoulder.y) * 2
+                    # Increase multiplier (from 2 to 4) to make it more sensitive
+                    dy_normalized = (j_wrist.y - j_shoulder.y) * 4
                     target_base = int(np.clip(dy_normalized * 90, -90, 90))
 
-                    # Apply smoothing
+                    # Apply smoothing and Invert Angles (as requested)
                     MAX_STEP = 10.0
                     EMA_ALPHA = 0.2
-                    targets = [target_base, target_shoulder, target_elbow]
+                    # Inverting all angles by negating them
+                    targets = [-target_base, -target_shoulder, -target_elbow]
                     
                     if not self.camera_active_last_frame:
                          self.smooth_camera_angles = [float(t) for t in targets]
