@@ -179,7 +179,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         spawn_row = QHBoxLayout()
         spawn_row.addWidget(QLabel("Spawn:"))
         self.obj_type = QComboBox()
-        self.obj_type.addItems(["cube", "cylinder"])
+        self.obj_type.addItems(["cube", "cylinder", "sphere", "torus"])
         self.obj_size = QDoubleSpinBox()
         self.obj_size.setValue(0.5)
         self.obj_size.setSingleStep(0.1)

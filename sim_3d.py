@@ -4,7 +4,7 @@ import json
 import os
 import math
 from ursina import *
-from panda3d.core import ConfigVariableString
+from panda3d.core import ConfigVariableString, NodePath
 
 # Configurar Ursina para incrustación o sin bordes dependiendo del SO
 # Esto debe hacerse antes de instanciar Ursina()
@@ -101,6 +101,105 @@ class CircularSlider(Entity):
             if hasattr(scene, 'sim_instance'):
                 scene.sim_instance.sync_to_gui()
 
+class TranslationGizmo(Entity):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.target = None
+        
+        # Color axes: Red=X, Green=Y, Blue=Z.
+        axis_length = 1.5
+        arrow_size = 0.2
+        thick = 0.05
+        
+        # --- Eje X (Rojo) ---
+        self.btn_x = Button(parent=self, model='cube', scale=(axis_length, thick, thick), position=(axis_length/2, 0, 0), color=color.red, collider='box')
+        self.arrow_x = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(axis_length, 0, 0), color=color.red, rotation=(0, 90, 0))
+        
+        # --- Eje Y (Verde) ---
+        self.btn_y = Button(parent=self, model='cube', scale=(thick, axis_length, thick), position=(0, axis_length/2, 0), color=color.green, collider='box')
+        self.arrow_y = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, axis_length, 0), color=color.green, rotation=(-90, 0, 0))
+        
+        # --- Eje Z (Azul) ---
+        self.btn_z = Button(parent=self, model='cube', scale=(thick, thick, axis_length), position=(0, 0, axis_length/2), color=color.blue, collider='box')
+        self.arrow_z = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, 0, axis_length), color=color.blue, rotation=(0, 0, 0))
+
+        # Configuraciones de botones
+        for btn in (self.btn_x, self.btn_y, self.btn_z):
+            btn.highlight_color = color.yellow
+            btn.pressed_color = color.white
+            btn.on_click = self.start_drag
+        
+        self.active_axis = None
+        self.original_target_pos = None
+        self.drag_start_mouse_y = 0
+        self.drag_start_mouse_x = 0
+        
+        # Iniciar apagado
+        self.disable()
+
+    def update(self):
+        if self.target and self.active_axis:
+            # Calcular delta respecto al movimiento del ratón
+            # Ursina normaliza la posición del mouse entre -0.5 y 0.5
+            dx = mouse.x - self.drag_start_mouse_x
+            dy = mouse.y - self.drag_start_mouse_y
+            
+            # Ajustar velocidad
+            speed = 20
+            
+            new_pos = list(self.original_target_pos)
+            if self.active_axis == 'x':
+                new_pos[0] += dx * speed
+            elif self.active_axis == 'y':
+                new_pos[1] += dy * speed
+            elif self.active_axis == 'z':
+                # En Z usamos el movimiento vertical del ratón, igual que con Y, requiere sensibilidad
+                new_pos[2] += dy * speed
+                
+            self.target.position = tuple(new_pos)
+            self.position = self.target.position
+            
+        elif self.target:
+            self.position = self.target.position
+
+    def input(self, key):
+        if key == 'left mouse up' and self.active_axis:
+            self.stop_drag()
+            
+    def start_drag(self):
+        self.active_axis = None
+        if mouse.hovered_entity == self.btn_x: self.active_axis = 'x'
+        elif mouse.hovered_entity == self.btn_y: self.active_axis = 'y'
+        elif mouse.hovered_entity == self.btn_z: self.active_axis = 'z'
+        
+        if self.active_axis:
+            self.original_target_pos = self.target.position
+            self.drag_start_mouse_x = mouse.x
+            self.drag_start_mouse_y = mouse.y
+            
+    def stop_drag(self):
+        self.active_axis = None
+
+    def attach_to(self, entity):
+        self.target = entity
+        self.position = entity.position
+        self.enable()
+        
+    def detach(self):
+        self.target = None
+        self.disable()
+
+    def delete_target(self):
+        if self.target:
+            obj = self.target
+            self.detach() # Soltar el objeto
+            
+            # Quitar de la lista de la simulación
+            if hasattr(scene, 'sim_instance') and obj in scene.sim_instance.spawned_objects:
+                scene.sim_instance.spawned_objects.remove(obj)
+                
+            destroy(obj)
+
 class RobotArmSim:
     def __init__(self):
         # Escenario básico
@@ -181,6 +280,11 @@ class RobotArmSim:
         
         self.selected_joint = None
         self.rotation_mode = False
+        self.spawned_objects = []
+        
+        # Instanciar el Gizmo
+        self.gizmo = TranslationGizmo()
+        
         scene.sim_instance = self
 
     def sync_to_gui(self):
@@ -242,10 +346,32 @@ class RobotArmSim:
 
     def spawn_object(self, shape, size, mass):
         # Spawnea objetos a un lado del robot para interactuar
-        if shape == "box":
-            Entity(model='cube', scale=size, color=color.random_color(), position=(2, 3, 0), collider='box')
+        obj = None
+        spawn_pos = (2.5, 3, 0)
+        
+        # Construir geometría según la forma enviada
+        if shape == "cube":
+            obj = Entity(model='cube', scale=size, color=color.random_color(), position=spawn_pos, collider='box')
         elif shape == "cylinder":
-            Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=(2, 3, 0), collider='mesh')
+            obj = Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=spawn_pos, collider='box')
+        elif shape == "sphere":
+            obj = Entity(model='sphere', scale=size, color=color.random_color(), position=spawn_pos, collider='sphere')
+        elif shape == "torus":
+            # Usar un Pipe circular (parecido al CircularSlider) ya que Ursina no tiene 'torus'
+            torus_path = [Vec3(math.cos(math.radians(i*(360/30))), 0, math.sin(math.radians(i*(360/30)))) for i in range(31)]
+            cross_section = [Vec3(math.cos(math.radians(i*(360/8)))*0.2, math.sin(math.radians(i*(360/8)))*0.2, 0) for i in range(9)]
+            try:
+                obj = Entity(model=Pipe(path=torus_path, base_shape=cross_section, cap_ends=False), scale=size, color=color.random_color(), position=spawn_pos, collider='mesh')
+                obj.model.generate_normals()
+                obj.model.smooth = True
+            except Exception:
+                obj = Entity(model='sphere', scale=(size, size*0.5, size), color=color.random_color(), position=spawn_pos, collider='box')
+                
+        if obj:
+            # Propiedad custom para poder detectarlos rápido al hacer click
+            obj.is_spawned_toy = True
+            obj.mass_value = mass # Para uso en posibles lógicas futuras
+            self.spawned_objects.append(obj)
 
     def update(self):
         # Recibir mensajes de control de la GUI principal.
@@ -299,16 +425,35 @@ class RobotArmSim:
             except Exception as e:
                 print("Error decodificando UDP:", e)
                 
-        # Selección de piezas al hacer clic
-        if mouse.left and not any(s.dragging for s in [self.slider0, self.slider1, self.slider2]):
-            if mouse.hovered_entity:
-                # Buscar a qué link pertenece
-                if mouse.hovered_entity in [self.link1_vis, self.slider0]:
-                    self.select_joint(0)
-                elif mouse.hovered_entity in [self.link2_vis, self.slider1, self.j1_vis]:
-                    self.select_joint(1)
-                elif mouse.hovered_entity in [self.link3_vis, self.slider2, self.j2_vis]:
-                    self.select_joint(2)
+        # Selección de piezas o de objetos instanciados al hacer clic
+        if mouse.left:
+            # Evitar solapamientos si estamos arrastrando el gizmo
+            if self.gizmo.active_axis is not None:
+                pass
+            elif not any(s.dragging for s in [self.slider0, self.slider1, self.slider2]):
+                if mouse.hovered_entity:
+                    # Parte del brazo
+                    if mouse.hovered_entity in [self.link1_vis, self.slider0]:
+                        self.select_joint(0)
+                        self.gizmo.detach()
+                    elif mouse.hovered_entity in [self.link2_vis, self.slider1, self.j1_vis]:
+                        self.select_joint(1)
+                        self.gizmo.detach()
+                    elif mouse.hovered_entity in [self.link3_vis, self.slider2, self.j2_vis]:
+                        self.select_joint(2)
+                        self.gizmo.detach()
+                    # Gizmo sobre un objeto ya seleccionado
+                    elif isinstance(mouse.hovered_entity, Button) and mouse.hovered_entity.parent == self.gizmo:
+                        pass # El clic en el gizmo se procesa en el propio gizmo
+                    # Objeto spawneado (toy)
+                    elif hasattr(mouse.hovered_entity, 'is_spawned_toy'):
+                        self.selected_joint = None
+                        for slider in [self.slider0, self.slider1, self.slider2]:
+                            slider.color = color.rgba(0, 1, 1, 0.4)
+                        self.gizmo.attach_to(mouse.hovered_entity)
+                else:
+                    # Deseleccionar al hacer clic en el vacío
+                    self.gizmo.detach()
 
         # Modo Rotación (Tecla R)
         if held_keys['r'] and self.selected_joint is not None:
@@ -342,6 +487,49 @@ class RobotArmSim:
         if time.time() - self.last_save_time > 5:
             self.save_camera_config()
             self.last_save_time = time.time()
+            
+        # --- Aplicar Fuerzas Físicas (Gravedad y Colisiones) ---
+        # Como Ursina base no tiene un "collider" rígido que interactúe entre sí sin Bullet,
+        # hacemos una pseudo-gravedad AABB (Bounding Box)
+        
+        # 1. Aplicamos gravedad tentativa a todos
+        for obj in self.spawned_objects:
+            if obj != self.gizmo.target: # No aplicar gravedad/colisión moviendo con Gizmo
+                # Gravedad
+                vel_y = 5.0 * time.dt * obj.mass_value
+                obj.y -= vel_y
+                
+                # Floor clamp
+                floor_y = obj.scale_y / 2
+                if obj.y < floor_y:
+                    obj.y = floor_y
+
+        # 2. Resolvemos penetraciones (AABB hacia arriba, simplificado)
+        steps = 2
+        for _ in range(steps):
+            for i in range(len(self.spawned_objects)):
+                for j in range(i + 1, len(self.spawned_objects)):
+                    A = self.spawned_objects[i]
+                    B = self.spawned_objects[j]
+                    
+                    if A == self.gizmo.target or B == self.gizmo.target:
+                        continue # No resolvemos colisiones contra el objeto arrastrado
+                        
+                    # AABB Check básico
+                    dx = abs(A.x - B.x)
+                    dy = abs(A.y - B.y)
+                    dz = abs(A.z - B.z)
+                    
+                    sum_hx = (A.scale_x + B.scale_x) / 2
+                    sum_hy = (A.scale_y + B.scale_y) / 2
+                    sum_hz = (A.scale_z + B.scale_z) / 2
+                    
+                    if dx < sum_hx and dy < sum_hy and dz < sum_hz:
+                        # Hay colisión. ¿Quién está arriba?
+                        if A.y > B.y:
+                            A.y = B.y + sum_hy # Empujamos A arriba
+                        else:
+                            B.y = A.y + sum_hy # Empujamos B arriba
 
     def select_joint(self, index):
         self.selected_joint = index
@@ -353,6 +541,18 @@ sim = RobotArmSim()
 
 def update():
     sim.update()
+
+def input(key):
+    if key == 'delete':
+        if sim.gizmo.enabled and sim.gizmo.target:
+            sim.gizmo.delete_target()
+    elif key == 'escape':
+        if sim.gizmo.enabled:
+            sim.gizmo.detach()
+            # Restaurar colores base de sliders si estaban amarillos por algo
+            for slider in [sim.slider0, sim.slider1, sim.slider2]:
+                slider.color = color.rgba(0, 1, 1, 0.4)
+            sim.selected_joint = None
 
 # Bucle principal de Ursina
 app.run()
