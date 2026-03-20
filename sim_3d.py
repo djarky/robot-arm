@@ -203,8 +203,8 @@ class TranslationGizmo(Entity):
 
 class RobotArmSim:
     # Nombres de las juntas del modelo GLB (armadura "0arm")
-    JOINT_NAMES = ["J0", "J1", "J3", "J4", "J5"]
-    NUM_JOINTS = 5
+    JOINT_NAMES = ["J0", "J1", "J2", "J3", "J4", "J5"]
+    NUM_JOINTS = 6
 
     def __init__(self):
         # Escenario básico
@@ -243,7 +243,7 @@ class RobotArmSim:
         model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb")
         
         # 1. Cargar el modelo estático para tener la base (pata4) que Actor descarta
-        self.static_model = Entity(parent=self.robot_root)
+        self.static_model = Entity(parent=self.robot_root, rotation_x=-90)
         self.static_model.setShaderAuto() # Generador automático de shaders de Panda3D
         
         try:
@@ -260,7 +260,7 @@ class RobotArmSim:
 
         # 2. Cargar el Actor para las partes animadas
         self.actor = Actor(model_path)
-        self.actor_entity = Entity(parent=self.robot_root)
+        self.actor_entity = Entity(parent=self.robot_root, rotation_x=-90)
         self.actor.reparentTo(self.actor_entity)
         self.actor_entity.setShaderAuto() # Activar generador (sin usar el shader de Ursina que colapsa)
         self.actor.setScale(1)
@@ -302,11 +302,12 @@ class RobotArmSim:
 
         # Eje de rotación por junta
         self.joint_axes = {
-            "J0": "H",  # user request: H
-            "J1": "R",
+            "J0": "R",  # base
+            "J1": "H",
+            "J2": "H",
             "J3": "R",
             "J4": "H",
-            "J5": "P",  # user request: P
+            "J5": "R",  # claw
         }
 
         self.angles = [0] * self.NUM_JOINTS
@@ -623,8 +624,8 @@ def input(key):
         if sim.gizmo.enabled:
             sim.gizmo.detach()
             sim.selected_joint = None
-    # Selección de junta con teclas numéricas 0-4
-    elif key in ['0', '1', '2', '3', '4']:
+    # Selección de junta con teclas numéricas 0-5
+    elif key in ['0', '1', '2', '3', '4', '5']:
         idx = int(key)
         if idx < sim.NUM_JOINTS:
             sim.select_joint(idx)
