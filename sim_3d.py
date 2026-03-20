@@ -5,6 +5,7 @@ import os
 import math
 from ursina import *
 from panda3d.core import ConfigVariableString, NodePath
+from direct.actor.Actor import Actor
 
 # Configurar Ursina para incrustación o sin bordes dependiendo del SO
 # Esto debe hacerse antes de instanciar Ursina()
@@ -201,6 +202,10 @@ class TranslationGizmo(Entity):
             destroy(obj)
 
 class RobotArmSim:
+    # Nombres de las juntas del modelo GLB (armadura "0arm")
+    JOINT_NAMES = ["J0", "J1", "J3", "J4", "J5"]
+    NUM_JOINTS = 5
+
     def __init__(self):
         # Escenario básico
         self.sky = Sky(color=color.rgb(135, 206, 235))
@@ -211,62 +216,105 @@ class RobotArmSim:
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
         Entity(model='cube', color=color.green, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
         Entity(model='cube', color=color.blue, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
-        # Paleta de colores Pastel - Saturados y Unlit para evitar el blanco
-        # Nota: Ursina espera valores entre 0.0 y 1.0. Dividimos por 255.
-        color_sage = color.rgb(160/255, 200/255, 140/255)
-        color_rose = color.rgb(230/255, 150/255, 170/255)
-        color_lavender = color.rgb(180/255, 150/255, 220/255)
-        color_cream = color.rgb(240/255, 230/255, 140/255)
-        color_orange = color.rgb(240/255, 180/255, 120/255)
-        color_mint = color.rgb(150/255, 210/255, 170/255)
-        color_peach = color.rgb(240/255, 160/255, 140/255)
-        
-        # Jerarquía base
-        self.arm_origin = Entity(parent=scene, y=0.4) # Origen general del brazo
-        
-        # Base visual (Sage) - Unlit para color real
-        self.base_vis = Entity(parent=scene, model='cube', color=color_sage, scale=(0.8, 0.4, 0.8), y=0.2, unlit=True)
-        
-        # Junta 0: Rotación Base (Y). Pivot
-        self.joint0 = Entity(parent=self.arm_origin) 
-        self.slider0 = CircularSlider(self.joint0, axis='y', radius=1.2, y=0.1, slider_color=color.cyan)
-        
-        # Link 1 visual: Pilar central (Rosa). Unlit.
-        self.link1_vis = Entity(parent=self.joint0, model='cube', color=color_rose, scale=(0.3, 1.5, 0.3), y=0.75, collider='box', unlit=True)
-        
-        # Junta 1: Hombro (X). Pivot al final del link1
-        self.joint1 = Entity(parent=self.joint0, y=1.5) 
-        self.slider1 = CircularSlider(self.joint1, axis='x', radius=0.6, rotation_z=90, slider_color=color.cyan)
 
-        # Tapa visual lavanda del hombro - Unlit.
-        self.j1_vis = Entity(parent=self.joint1, model='cube', color=color_lavender, scale=(0.5, 0.3, 0.5), rotation_x=90, unlit=True)
-        
-        # Link 2 visual: Brazo principal (Amarillo). Unlit.
-        self.link2_vis = Entity(parent=self.joint1, model='cube', color=color_cream, scale=(0.25, 1.5, 0.25), y=0.75, collider='box', unlit=True)
-        
-        # Junta 2: Codo (X). Pivot al final del link2
-        self.joint2 = Entity(parent=self.joint1, y=1.5)
-        self.slider2 = CircularSlider(self.joint2, axis='x', radius=0.5, rotation_z=90, slider_color=color.cyan)
+        # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
+        self.robot_root = Entity(position=(0, -1.0, 0))
 
-        # Tapa visual naranja del codo - Unlit.
-        self.j2_vis = Entity(parent=self.joint2, model='cube', color=color_orange, scale=(0.4, 0.2, 0.4), rotation_x=90, unlit=True)
+        # ── Iluminación ──
+        # shadows=False es CRÍTICO para evitar Segmentation Fault en este entorno Linux.
+        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=False)
+        self.dir_light.look_at(self.robot_root)
+        self.ambient_light = AmbientLight(color=color.rgba(150, 150, 150, 0.6))
+
+        # Helper para aplicar material PBR básico a cada nodo con su color,
+        # evitando que el render sea plano (sin shading) o negro (metálico).
+        def apply_colored_material(np, c):
+            from panda3d.core import Material
+            m = Material()
+            m.set_metallic(0.0)      # Sin reflejo de entorno negro
+            m.set_roughness(0.5)     # Difusión estándar
+            m.set_shininess(40.0)    # Brillo especular
+            m.set_specular((0.6, 0.6, 0.6, 1)) # Fuerza del brillo
+            m.set_diffuse((c[0], c[1], c[2], 1)) # Asignar el color deseado al material
+            m.set_ambient((c[0], c[1], c[2], 1))
+            np.setMaterial(m, 1)
+
+        # ── Cargar modelo GLB con armadura ──
+        model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb")
         
-        # Link 3 visual: Antebrazo (Menta). Unlit.
-        self.link3_vis = Entity(parent=self.joint2, model=Cylinder(resolution=16), color=color_mint, scale=(0.2, 0.8, 0.2), y=0, collider='box', unlit=True)
+        # 1. Cargar el modelo estático para tener la base (pata4) que Actor descarta
+        self.static_model = Entity(parent=self.robot_root)
+        self.static_model.setShaderAuto() # Generador automático de shaders de Panda3D
         
-        # Pinza (Gripper) visual al final del antebrazo - Unlit.
-        # Lo rotamos para que mire hacia adelante (eje Z local de la muñeca) en lugar de hacia arriba
-        self.gripper_base = Entity(parent=self.joint2, y=0.8, rotation_x=90)
-        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.5, 0.1, 0.4), unlit=True)              # Palma
-        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.1, 0.4, 0.1), position=(-0.15, 0.2, 0), unlit=True) # Dedo Izq
-        Entity(parent=self.gripper_base, model='cube', color=color_peach, scale=(0.1, 0.4, 0.1), position=(0.15, 0.2, 0), unlit=True)  # Dedo Der
-        
-        self.angles = [0, 0, 0]        
+        try:
+            panda_model = loader.loadModel(model_path)
+            panda_model.reparentTo(self.static_model)
+            for np in panda_model.findAllMatches("**/+GeomNode"):
+                name = np.getName().lower()
+                if "pata4" not in name and "base" not in name:
+                    np.hide()  # Ocultar duplicados (el Actor dibuja las partes animadas)
+                else:
+                    apply_colored_material(np, color.dark_gray)
+        except Exception as e:
+            print(f"Error cargando base estática: {e}")
+
+        # 2. Cargar el Actor para las partes animadas
+        self.actor = Actor(model_path)
+        self.actor_entity = Entity(parent=self.robot_root)
+        self.actor.reparentTo(self.actor_entity)
+        self.actor_entity.setShaderAuto() # Activar generador (sin usar el shader de Ursina que colapsa)
+        self.actor.setScale(1)
+        self.actor.setPos(0, 0, 0)
+
+        # Asignar materiales con colores fijos a los meshes animados del Actor
+        colors = [color.cyan, color.orange, color.azure, color.yellow, color.lime, color.magenta]
+        i = 0
+        for np in self.actor.findAllMatches("**/+GeomNode"):
+            name = np.getName().lower()
+            if "0arm" in name:
+                apply_colored_material(np, color.dark_gray)
+            elif "garra" in name or "pinza" in name or "tapa" in name:
+                apply_colored_material(np, color.red)
+            elif "engranaje" in name or "barra" in name:
+                apply_colored_material(np, color.gray)
+            else:
+                apply_colored_material(np, colors[i % len(colors)])
+                i += 1
+
+        # Elemento UI para mostrar información de la junta
+        self.axis_text = Text(text="[Selecciona una junta (0-4)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
+
+        # Listar juntas para depuración
+        print("=== Juntas del modelo ===")
+        self.actor.listJoints()
+
+        # Obtener nodos controlables para cada junta
+        self.joint_controls = {}
+        self.rest_hprs = {}  # Guardar la rotación original (rest pose) de cada junta
+        for jname in self.JOINT_NAMES:
+            try:
+                ctrl = self.actor.controlJoint(None, "modelRoot", jname)
+                self.joint_controls[jname] = ctrl
+                self.rest_hprs[jname] = ctrl.getHpr()
+                print(f"  controlJoint('{jname}') → OK | Rest HPR: {self.rest_hprs[jname]}")
+            except Exception as e:
+                print(f"  controlJoint('{jname}') → FALLO: {e}")
+
+        # Eje de rotación por junta
+        self.joint_axes = {
+            "J0": "H",  # user request: H
+            "J1": "R",
+            "J3": "R",
+            "J4": "H",
+            "J5": "P",  # user request: P
+        }
+
+        self.angles = [0] * self.NUM_JOINTS
         
         # Configuración de Cámara (EditorCamera) por defecto para que no se pierda el usuario
         self.cam = EditorCamera()
         self.cam.position = (0, 3, -8)  # Posición inicial cómoda
-        self.cam.look_at(self.base_vis)
+        self.cam.look_at(self.floor)
         
         # Networking (UDP receptor para no bloquear a la GUI principal)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -287,14 +335,29 @@ class RobotArmSim:
         
         scene.sim_instance = self
 
+    def _apply_angle(self, joint_index, angle_deg):
+        """Aplica un ángulo (grados) a la junta dada por índice."""
+        clamped = max(-90, min(90, angle_deg))
+        self.angles[joint_index] = clamped
+        jname = self.JOINT_NAMES[joint_index]
+        ctrl = self.joint_controls.get(jname)
+        if ctrl:
+            axis = self.joint_axes[jname]
+            rest = self.rest_hprs.get(jname, (0, 0, 0))
+            if axis == "H":
+                ctrl.setHpr(rest[0] + clamped, rest[1], rest[2])
+            elif axis == "P":
+                ctrl.setHpr(rest[0], rest[1] + clamped, rest[2])
+            elif axis == "R":
+                ctrl.setHpr(rest[0], rest[1], rest[2] + clamped)
+
+    def _get_angle(self, joint_index):
+        """Devuelve el ángulo actual de la junta dada por índice."""
+        return self.angles[joint_index]
+
     def sync_to_gui(self):
-        # Enviar ángulos actuales a la GUI para sincronizar sliders
-        # Joint0 -> y, Joint1 -> -x, Joint2 -> -x
-        angles = [
-            round(self.joint0.rotation_y, 1),
-            round(-self.joint1.rotation_x, 1),
-            round(-self.joint2.rotation_x, 1)
-        ]
+        """Enviar ángulos actuales a la GUI para sincronizar sliders."""
+        angles = [round(self._get_angle(i), 1) for i in range(self.NUM_JOINTS)]
         msg = json.dumps({"type": "sync_angles", "data": angles})
         try:
             feedback_sock.sendto(msg.encode(), GUI_ADDR)
@@ -390,12 +453,10 @@ class RobotArmSim:
             try:
                 msg = json.loads(last_data.decode())
                 if msg.get("type") == "angles":
-                    self.angles = msg["data"]
-                    # Aplicar ángulos recibidos a las rotaciones locales (sobrescribe la entrada del ratón)
-                    # Clampeamos a -90, 90
-                    self.joint0.rotation_y = max(-90, min(90, self.angles[0]))
-                    self.joint1.rotation_x = -max(-90, min(90, self.angles[1]))
-                    self.joint2.rotation_x = -max(-90, min(90, self.angles[2]))
+                    incoming = msg["data"]
+                    # Aplicar ángulos recibidos a las rotaciones (sobrescribe la entrada del ratón)
+                    for i in range(min(len(incoming), self.NUM_JOINTS)):
+                        self._apply_angle(i, incoming[i])
                 elif msg.get("type") == "spawn":
                     self.spawn_object(msg["shape"], msg["size"], msg["mass"])
                 elif msg.get("type") == "reset_camera":
@@ -425,62 +486,52 @@ class RobotArmSim:
             except Exception as e:
                 print("Error decodificando UDP:", e)
                 
-        # Selección de piezas o de objetos instanciados al hacer clic
+        # Selección de objetos instanciados al hacer clic
         if mouse.left:
             # Evitar solapamientos si estamos arrastrando el gizmo
             if self.gizmo.active_axis is not None:
                 pass
-            elif not any(s.dragging for s in [self.slider0, self.slider1, self.slider2]):
+            else:
                 if mouse.hovered_entity:
-                    # Parte del brazo
-                    if mouse.hovered_entity in [self.link1_vis, self.slider0]:
-                        self.select_joint(0)
-                        self.gizmo.detach()
-                    elif mouse.hovered_entity in [self.link2_vis, self.slider1, self.j1_vis]:
-                        self.select_joint(1)
-                        self.gizmo.detach()
-                    elif mouse.hovered_entity in [self.link3_vis, self.slider2, self.j2_vis]:
-                        self.select_joint(2)
-                        self.gizmo.detach()
                     # Gizmo sobre un objeto ya seleccionado
-                    elif isinstance(mouse.hovered_entity, Button) and mouse.hovered_entity.parent == self.gizmo:
+                    if isinstance(mouse.hovered_entity, Button) and mouse.hovered_entity.parent == self.gizmo:
                         pass # El clic en el gizmo se procesa en el propio gizmo
                     # Objeto spawneado (toy)
                     elif hasattr(mouse.hovered_entity, 'is_spawned_toy'):
                         self.selected_joint = None
-                        for slider in [self.slider0, self.slider1, self.slider2]:
-                            slider.color = color.rgba(0, 1, 1, 0.4)
                         self.gizmo.attach_to(mouse.hovered_entity)
                 else:
                     # Deseleccionar al hacer clic en el vacío
                     self.gizmo.detach()
 
-        # Modo Rotación (Tecla R)
+        # Modo Rotación (Tecla R) — rota la junta seleccionada
         if held_keys['r'] and self.selected_joint is not None:
             self.rotation_mode = True
         
         if self.rotation_mode:
             delta = mouse.velocity[0] * 200
-            if self.selected_joint == 0:
-                self.joint0.rotation_y = max(-90, min(90, self.joint0.rotation_y + delta))
-            elif self.selected_joint == 1:
-                self.joint1.rotation_x = max(-90, min(90, self.joint1.rotation_x - delta))
-            elif self.selected_joint == 2:
-                self.joint2.rotation_x = max(-90, min(90, self.joint2.rotation_x - delta))
+            if self.selected_joint is not None:
+                cur = self._get_angle(self.selected_joint)
+                self._apply_angle(self.selected_joint, cur + delta)
             
             self.sync_to_gui()
             
             if mouse.left: # Confirmar
                 self.rotation_mode = False
 
-        # Control manual de fallback con el ratón solo si se presiona la tecla shift, 
-        # para no interferir con la EditorCamera por defecto.
+        # Control manual de fallback con el ratón (shift + clic)
         if held_keys['shift']:
             if mouse.left:
-                self.joint0.rotation_y = max(-90, min(90, self.joint0.rotation_y + mouse.velocity[0] * 100))
-                self.joint1.rotation_x = max(-90, min(90, self.joint1.rotation_x - mouse.velocity[1] * 100))
+                # Shift+Left: rota J0 (base) con movimiento horizontal
+                cur = self._get_angle(0)
+                self._apply_angle(0, cur + mouse.velocity[0] * 100)
+                # y J1 con movimiento vertical
+                cur1 = self._get_angle(1)
+                self._apply_angle(1, cur1 - mouse.velocity[1] * 100)
             elif mouse.right:
-                self.joint2.rotation_x = max(-90, min(90, self.joint2.rotation_x - mouse.velocity[1] * 100))
+                # Shift+Right: rota J3 (codo)
+                cur2 = self._get_angle(2)
+                self._apply_angle(2, cur2 - mouse.velocity[1] * 100)
             self.sync_to_gui()
         
         # Guardar posición de cámara cada 5 segundos si ha cambiado notablemente
@@ -533,9 +584,31 @@ class RobotArmSim:
 
     def select_joint(self, index):
         self.selected_joint = index
-        # Visual feedback for selection
-        for i, slider in enumerate([self.slider0, self.slider1, self.slider2]):
-            slider.color = color.yellow if i == index else color.rgba(0, 1, 1, 0.4) # Restaurado a Cyan (0,1,1) base con glow
+        jname = self.JOINT_NAMES[index] if index < self.NUM_JOINTS else '?'
+        if jname != '?':
+            axis = self.joint_axes[jname]
+            axis_name = "Heading(Y)" if axis=="H" else "Pitch(X)" if axis=="P" else "Roll(Z)"
+            self.axis_text.text = f"Junta: {jname}\nEje: {axis} - {axis_name}\n[A] Cambiar"
+            print(f"Junta seleccionada: {jname} (Eje actual: {axis} - {axis_name}) [Presiona 'A' para cambiar eje]")
+
+    def cycle_axis(self):
+        if self.selected_joint is not None:
+            jname = self.JOINT_NAMES[self.selected_joint]
+            axes = ['H', 'P', 'R']
+            current = self.joint_axes[jname]
+            next_axis = axes[(axes.index(current) + 1) % 3]
+            self.joint_axes[jname] = next_axis
+            
+            # Reset all rotations on the control node to its rest pose before reapplying on new axis
+            ctrl = self.joint_controls.get(jname)
+            if ctrl:
+                rest = self.rest_hprs.get(jname, (0, 0, 0))
+                ctrl.setHpr(rest[0], rest[1], rest[2])
+            self._apply_angle(self.selected_joint, self.angles[self.selected_joint])
+            
+            axis_name = "Heading(Y)" if next_axis=="H" else "Pitch(X)" if next_axis=="P" else "Roll(Z)"
+            self.axis_text.text = f"Junta: {jname}\nEje: {next_axis} - {axis_name}\n[A] Cambiar"
+            print(f">>> Junta {jname} cambió a eje: {next_axis} ({axis_name})")
 
 sim = RobotArmSim()
 
@@ -549,10 +622,15 @@ def input(key):
     elif key == 'escape':
         if sim.gizmo.enabled:
             sim.gizmo.detach()
-            # Restaurar colores base de sliders si estaban amarillos por algo
-            for slider in [sim.slider0, sim.slider1, sim.slider2]:
-                slider.color = color.rgba(0, 1, 1, 0.4)
             sim.selected_joint = None
+    # Selección de junta con teclas numéricas 0-4
+    elif key in ['0', '1', '2', '3', '4']:
+        idx = int(key)
+        if idx < sim.NUM_JOINTS:
+            sim.select_joint(idx)
+    # Ciclar eje de rotación con tecla 'A'
+    elif key == 'a':
+        sim.cycle_axis()
 
 # Bucle principal de Ursina
 app.run()
