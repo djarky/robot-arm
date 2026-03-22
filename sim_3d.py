@@ -277,8 +277,8 @@ class RobotArmSim:
             "J0": "H",  # user request: H
             "J1": "R",
             "J2": "R",
-            "J3": "R",
-            "J4": "H",
+            "J3": "H",
+            "J4": "P",
             "J5": "P",  # user request: P
         }
 
@@ -535,7 +535,7 @@ class RobotArmSim:
         jname = self.JOINT_NAMES[index] if index < self.NUM_JOINTS else '?'
         if jname != '?':
             axis = self.joint_axes[jname]
-            axis_name = "Heading(Y)" if axis=="H" else "Pitch(X)" if axis=="P" else "Roll(Z)"
+            axis_name = "Heading (Z)" if axis=="H" else "Pitch (X)" if axis=="P" else "Roll (Y)"
             self.axis_text.text = f"Junta: {jname}\nEje: {axis} - {axis_name}\n[A] Cambiar"
             print(f"Junta seleccionada: {jname} (Eje actual: {axis} - {axis_name}) [Presiona 'A' para cambiar eje]")
 
@@ -554,7 +554,7 @@ class RobotArmSim:
                 ctrl.setHpr(rest[0], rest[1], rest[2])
             self._apply_angle(self.selected_joint, self.angles[self.selected_joint])
             
-            axis_name = "Heading(Y)" if next_axis=="H" else "Pitch(X)" if next_axis=="P" else "Roll(Z)"
+            axis_name = "Heading (Z)" if next_axis=="H" else "Pitch (X)" if next_axis=="P" else "Roll (Y)"
             self.axis_text.text = f"Junta: {jname}\nEje: {next_axis} - {axis_name}\n[A] Cambiar"
             print(f">>> Junta {jname} cambió a eje: {next_axis} ({axis_name})")
 
