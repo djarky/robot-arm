@@ -34,47 +34,50 @@ DEFAULT_CAM_ROT = (-346.42, -18.57, 0)
 feedback_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 GUI_ADDR = ("127.0.0.1", 5006)
 
-class CircularSlider(Entity):
-    def __init__(self, target_entity, axis='y', radius=0.8, slider_color=color.cyan, **kwargs):
-        # Generar una "rosquilla" (toroide) ultra-estilizada y delgada
-        segments = 100 # Resolución para suavidad
+class CircularJointSlider(Entity):
+    def __init__(self, sim, joint_index, axis='H', radius=2.4, slider_color=color.cyan, **kwargs):
+        # Resolución reducida para evitar "lag" masivo en colisionador de malla
+        segments = 32 # Antes 100, mucho más ligero
         path = [Vec3(math.cos(math.radians(i*(360/segments)))*radius, 0, math.sin(math.radians(i*(360/segments)))*radius) for i in range(segments + 1)]
             
-        # Sección transversal cómoda y robusta
-        thickness = 0.06 # Aumentado para máximo agarre y visibilidad
-        cross_segments = 12
-        # IMPORTANTE: Usar Vec3 para evitar el TypeError en el generador de Pipe interno
+        thickness = 0.05 
+        cross_segments = 8 # Antes 12
         cross_section = [Vec3(math.cos(math.radians(i*(360/cross_segments)))*thickness, math.sin(math.radians(i*(360/cross_segments)))*thickness, 0) for i in range(cross_segments + 1)]
         
         super().__init__(
-            parent=target_entity,
             model=Pipe(path=path, base_shape=cross_section, cap_ends=False),
             color=color.rgba(slider_color.r, slider_color.g, slider_color.b, 0.4),
             double_sided=True,
             collider='mesh',
             **kwargs
         )
-        # Forzar suavizado de malla y look de "luz"
+        
         if self.model:
             self.model.generate_normals()
             self.model.smooth = True
             
         self.unlit = True 
-        self.target = target_entity
-        self.axis = axis
-        self.radius = radius
+        self.sim = sim
+        self.joint_index = joint_index
+        self.axis_type = axis # H, P, or R
         self.base_color = slider_color
         self.dragging = False
         self.pulse_time = 0
 
+        # Orientación según el eje lógico de Panda3D
+        if self.axis_type == 'H': # Heading (Z) -> Plano horizontal
+            self.rotation_x = 0
+        elif self.axis_type == 'P': # Pitch (X) -> Girar para que mire a X
+            self.rotation_z = 90
+        elif self.axis_type == 'R': # Roll (Y) -> Girar para que mire a Y
+            self.rotation_x = 90
+
     def on_mouse_enter(self):
         self.color = color.rgba(1, 1, 1, 0.9)
-        self.scale = 1.02 # Muy sutil
     
     def on_mouse_exit(self):
         if not self.dragging:
             self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
-            self.scale = 1.0
 
     def input(self, key):
         if key == 'left mouse down' and mouse.hovered_entity == self:
@@ -83,24 +86,19 @@ class CircularSlider(Entity):
         elif key == 'left mouse up':
             self.dragging = False
             self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
-            self.scale = 1.0
 
     def update(self):
-        # Efecto de pulso sutil (glow)
         self.pulse_time += time.dt * 2
         if not self.dragging:
             alpha = 0.3 + math.sin(self.pulse_time) * 0.1
             self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, alpha)
 
         if self.dragging:
+            # Usar velocidad del ratón para incrementar el ángulo
             delta = mouse.velocity[0] + mouse.velocity[1]
-            if self.axis == 'y':
-                self.target.rotation_y = max(-90, min(90, self.target.rotation_y + delta * 500))
-            else:
-                self.target.rotation_x = max(-90, min(90, self.target.rotation_x - delta * 500))
-            
-            if hasattr(scene, 'sim_instance'):
-                scene.sim_instance.sync_to_gui()
+            current_angle = self.sim._get_angle(self.joint_index)
+            self.sim._apply_angle(self.joint_index, current_angle + delta * 500)
+            self.sim.sync_to_gui()
 
 class TranslationGizmo(Entity):
     def __init__(self, **kwargs):
@@ -254,7 +252,7 @@ class RobotArmSim:
 
 
         # Elemento UI para mostrar información de la junta
-        #self.axis_text = Text(text="[Selecciona una junta (0-5)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
+        self.axis_text = Text(text="[Selecciona una junta (0-5)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
 
         # Listar juntas para depuración
         print("=== Juntas del modelo ===")
@@ -306,6 +304,28 @@ class RobotArmSim:
         # Instanciar el Gizmo
         self.gizmo = TranslationGizmo()
         
+        # ── Añadir Sliders Circulares a cada junta ──
+        self.joint_sliders = []
+        for i, jname in enumerate(self.JOINT_NAMES):
+            ctrl = self.joint_controls.get(jname)
+            if ctrl:
+                axis = self.joint_axes[jname]
+                # El radio base de la geometría es 1, lo escalaremos con world_scale
+                slider = CircularJointSlider(self, i, axis=axis, radius=1.0) 
+                
+                # Para que el slider esté EXACTAMENTE en el pivote de la junta,
+                # usamos exposeJoint que nos da un nodo que sigue el hueso.
+                # Lo emparentamos para que herede la posición/rotación del brazo.
+                exposed_node = self.actor.exposeJoint(None, "modelRoot", jname)
+                slider.parent = exposed_node
+                slider.position = (0,0,0) # Centrado en la junta
+                
+                # El robot mide aprox 100 unidades según el diagnóstico.
+                # Aumentamos a 15.0 según petición del usuario (150-200% del anterior 8.0)
+                slider.world_scale = 15.0 
+                
+                self.joint_sliders.append(slider)
+
         scene.sim_instance = self
 
     def _apply_angle(self, joint_index, angle_deg):
