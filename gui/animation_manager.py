@@ -448,11 +448,11 @@ class AnimationManagerMixin:
         self.interp_count = 0
 
         self.current_angles_f = [float(s.value()) for s in self.sliders]
-
-        # Pad target angles if necessary
+        
+        # Asegurar que target_angles tiene suficientes elementos (compat. poses con 3 ángulos)
         while len(self.target_angles) < len(self.sliders):
             self.target_angles.append(0)
-
+        
         self.interp_deltas = [
             (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
             for i in range(len(self.sliders))
