@@ -203,12 +203,12 @@ class TranslationGizmo(Entity):
 
 class RobotArmSim:
     # Nombres de las juntas del modelo GLB (armadura "0arm")
-    JOINT_NAMES = ["J0", "J1", "J2", "J3", "J4", "J5"]
+    JOINT_NAMES = ["J0", "J1","J2", "J3", "J4", "J5"]
     NUM_JOINTS = 6
 
     def __init__(self):
         # Escenario básico
-        self.sky = Sky(color=color.rgb(135, 206, 235))
+        self.sky = Sky()
         self.floor = Entity(model='plane', scale=500, texture='white_cube', 
                           texture_scale=(50,50), color=color.gray, collider='box')
 
@@ -218,71 +218,43 @@ class RobotArmSim:
         Entity(model='cube', color=color.blue, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
 
         # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
-        self.robot_root = Entity(position=(0, -1.0, 0))
+        self.robot_root = Entity(position=(0, -1.0, 0) )
 
         # ── Iluminación ──
         # shadows=False es CRÍTICO para evitar Segmentation Fault en este entorno Linux.
-        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=False)
+        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=True)
         self.dir_light.look_at(self.robot_root)
         self.ambient_light = AmbientLight(color=color.rgba(150, 150, 150, 0.6))
 
-        # Helper para aplicar material PBR básico a cada nodo con su color,
-        # evitando que el render sea plano (sin shading) o negro (metálico).
-        def apply_colored_material(np, c):
-            from panda3d.core import Material
-            m = Material()
-            m.set_metallic(0.0)      # Sin reflejo de entorno negro
-            m.set_roughness(0.5)     # Difusión estándar
-            m.set_shininess(40.0)    # Brillo especular
-            m.set_specular((0.6, 0.6, 0.6, 1)) # Fuerza del brillo
-            m.set_diffuse((c[0], c[1], c[2], 1)) # Asignar el color deseado al material
-            m.set_ambient((c[0], c[1], c[2], 1))
-            np.setMaterial(m, 1)
+
+
 
         # ── Cargar modelo GLB con armadura ──
-        model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb")
+        model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb" )
         
         # 1. Cargar el modelo estático para tener la base (pata4) que Actor descarta
-        self.static_model = Entity(parent=self.robot_root, rotation_x=-90)
-        self.static_model.setShaderAuto() # Generador automático de shaders de Panda3D
+        self.static_model = Entity(parent=self.robot_root , texture ='texture.png')
+
         
         try:
             panda_model = loader.loadModel(model_path)
             panda_model.reparentTo(self.static_model)
             for np in panda_model.findAllMatches("**/+GeomNode"):
                 name = np.getName().lower()
-                if "pata4" not in name and "base" not in name:
-                    np.hide()  # Ocultar duplicados (el Actor dibuja las partes animadas)
-                else:
-                    apply_colored_material(np, color.dark_gray)
         except Exception as e:
             print(f"Error cargando base estática: {e}")
 
         # 2. Cargar el Actor para las partes animadas
-        self.actor = Actor(model_path)
-        self.actor_entity = Entity(parent=self.robot_root, rotation_x=-90)
+        self.actor = Actor(model_path )
+        self.actor_entity = Entity(parent=self.robot_root , texture ='texture.png')
         self.actor.reparentTo(self.actor_entity)
-        self.actor_entity.setShaderAuto() # Activar generador (sin usar el shader de Ursina que colapsa)
         self.actor.setScale(1)
         self.actor.setPos(0, 0, 0)
 
-        # Asignar materiales con colores fijos a los meshes animados del Actor
-        colors = [color.cyan, color.orange, color.azure, color.yellow, color.lime, color.magenta]
-        i = 0
-        for np in self.actor.findAllMatches("**/+GeomNode"):
-            name = np.getName().lower()
-            if "0arm" in name:
-                apply_colored_material(np, color.dark_gray)
-            elif "garra" in name or "pinza" in name or "tapa" in name:
-                apply_colored_material(np, color.red)
-            elif "engranaje" in name or "barra" in name:
-                apply_colored_material(np, color.gray)
-            else:
-                apply_colored_material(np, colors[i % len(colors)])
-                i += 1
+
 
         # Elemento UI para mostrar información de la junta
-        self.axis_text = Text(text="[Selecciona una junta (0-4)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
+        #self.axis_text = Text(text="[Selecciona una junta (0-5)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
 
         # Listar juntas para depuración
         print("=== Juntas del modelo ===")
@@ -302,12 +274,12 @@ class RobotArmSim:
 
         # Eje de rotación por junta
         self.joint_axes = {
-            "J0": "R",  # base
-            "J1": "H",
-            "J2": "H",
+            "J0": "H",  # user request: H
+            "J1": "R",
+            "J2": "R",
             "J3": "R",
             "J4": "H",
-            "J5": "R",  # claw
+            "J5": "P",  # user request: P
         }
 
         self.angles = [0] * self.NUM_JOINTS
@@ -417,7 +389,7 @@ class RobotArmSim:
         if shape == "cube":
             obj = Entity(model='cube', scale=size, color=color.random_color(), position=spawn_pos, collider='box')
         elif shape == "cylinder":
-            obj = Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=spawn_pos, collider='box')
+            obj = Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=spawn_pos, collider='mesh')
         elif shape == "sphere":
             obj = Entity(model='sphere', scale=size, color=color.random_color(), position=spawn_pos, collider='sphere')
         elif shape == "torus":
@@ -556,32 +528,7 @@ class RobotArmSim:
                 if obj.y < floor_y:
                     obj.y = floor_y
 
-        # 2. Resolvemos penetraciones (AABB hacia arriba, simplificado)
-        steps = 2
-        for _ in range(steps):
-            for i in range(len(self.spawned_objects)):
-                for j in range(i + 1, len(self.spawned_objects)):
-                    A = self.spawned_objects[i]
-                    B = self.spawned_objects[j]
-                    
-                    if A == self.gizmo.target or B == self.gizmo.target:
-                        continue # No resolvemos colisiones contra el objeto arrastrado
-                        
-                    # AABB Check básico
-                    dx = abs(A.x - B.x)
-                    dy = abs(A.y - B.y)
-                    dz = abs(A.z - B.z)
-                    
-                    sum_hx = (A.scale_x + B.scale_x) / 2
-                    sum_hy = (A.scale_y + B.scale_y) / 2
-                    sum_hz = (A.scale_z + B.scale_z) / 2
-                    
-                    if dx < sum_hx and dy < sum_hy and dz < sum_hz:
-                        # Hay colisión. ¿Quién está arriba?
-                        if A.y > B.y:
-                            A.y = B.y + sum_hy # Empujamos A arriba
-                        else:
-                            B.y = A.y + sum_hy # Empujamos B arriba
+
 
     def select_joint(self, index):
         self.selected_joint = index
@@ -624,8 +571,8 @@ def input(key):
         if sim.gizmo.enabled:
             sim.gizmo.detach()
             sim.selected_joint = None
-    # Selección de junta con teclas numéricas 0-5
-    elif key in ['0', '1', '2', '3', '4', '5']:
+    # Selección de junta con teclas numéricas 0-4
+    elif key in ['0', '1', '2', '3', '4','5']:
         idx = int(key)
         if idx < sim.NUM_JOINTS:
             sim.select_joint(idx)

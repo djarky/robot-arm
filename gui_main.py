@@ -157,17 +157,17 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         # Interpolation engine state
         self.interp_timer = QTimer()
         self.interp_timer.timeout.connect(self.update_interpolation)
-        self.target_angles = [0, 0, 0]
+        self.target_angles = [0, 0, 0, 0, 0, 0]
         self.current_interp_sequence = []
         self.current_seq_index = -1
         self.interp_steps = 0
         self.interp_count = 0
-        self.interp_deltas = [0, 0, 0]
-        self.current_angles_f = [0.0, 0.0, 0.0]
+        self.interp_deltas = [0, 0, 0, 0, 0, 0]
+        self.current_angles_f = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.playback_direction = 1
 
         # Camera smoothing state
-        self.smooth_camera_angles = [0.0, 0.0, 0.0]
+        self.smooth_camera_angles = [0.0, 0.0, 0.0]  # Solo 3 ejes para tracking de cámara
         self.camera_active_last_frame = False
 
     # ------------------------------------------------------------------
@@ -230,12 +230,13 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin, QMai
         joint_group = QGroupBox("Manual Control")
         joint_layout = QFormLayout()
         self.sliders = []
-        for i in range(3):
+        joint_labels = ["J0", "J1", "J2", "J3", "J4", "J5"]
+        for i in range(6):
             s = QSlider(Qt.Horizontal)
             s.setRange(-90, 90)
             s.setValue(0)
             s.valueChanged.connect(self.send_angles)
-            joint_layout.addRow(f"J{i}:", s)
+            joint_layout.addRow(f"{joint_labels[i]}:", s)
             self.sliders.append(s)
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
