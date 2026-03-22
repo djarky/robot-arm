@@ -44,8 +44,9 @@ class CommunicationMixin:
         self.sock.sendto(msg.encode(), self.target_addr)
 
         if self.ser and self.ser.is_open:
-            # Format: "ANG1,ANG2,ANG3,GRIPPER\n" (offset by +90 to map -90..90 → 0..180)
-            serial_msg = f"{angles[0] + 90},{angles[1] + 90},{angles[2] + 90},0\n"
+            # Format: "ANG0,ANG1,ANG2,ANG3,ANG4,GRIPPER\n" (offset by +90 to map -90..90 → 0..180)
+            parts = [str(a + 90) for a in angles]
+            serial_msg = ",".join(parts) + ",0\n"
             self.ser.write(serial_msg.encode())
 
     def send_camera_angles(self, angles: list):
@@ -225,7 +226,10 @@ class CommunicationMixin:
                 with open("config.json", "r") as f:
                     config = json.load(f)
 
-                angles = config.get("joint_angles", [0, 0, 0])
+                angles = config.get("joint_angles", [0, 0, 0, 0, 0, 0])
+                # Padding para configs antiguas con menos de 5 ángulos
+                while len(angles) < len(self.sliders):
+                    angles.append(0)
                 for i, angle in enumerate(angles):
                     if i < len(self.sliders):
                         self.sliders[i].setValue(angle)
