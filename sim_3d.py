@@ -35,7 +35,7 @@ feedback_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 GUI_ADDR = ("127.0.0.1", 5006)
 
 class CircularJointSlider(Entity):
-    def __init__(self, sim, joint_index, axis='H', radius=2.4, slider_color=color.cyan, **kwargs):
+    def __init__(self, sim, joint_index, axis='YAW', radius=2.4, slider_color=color.cyan, **kwargs):
         # Resolución reducida para evitar "lag" masivo en colisionador de malla
         segments = 32 # Antes 100, mucho más ligero
         path = [Vec3(math.cos(math.radians(i*(360/segments)))*radius, 0, math.sin(math.radians(i*(360/segments)))*radius) for i in range(segments + 1)]
@@ -59,23 +59,23 @@ class CircularJointSlider(Entity):
         self.unlit = True 
         self.sim = sim
         self.joint_index = joint_index
-        self.axis_type = axis # H, P, or R
+        self.axis_type = axis # YAW, PITCH, or ROLL
         self.base_color = slider_color
         self.dragging = False
         self.pulse_time = 0
 
         # Orientación según el eje lógico de Panda3D
-        if self.axis_type == 'H': # Heading (Z)
-            # J0 y J3 son H y funcionan bien en Horizontal (rot_x=0)
+        if self.axis_type == 'YAW': # Heading (Z)
+            # J0 y J3 son YAW y funcionan bien en Horizontal (rot_x=0)
             self.rotation_x = 0
-        elif self.axis_type == 'P': # Pitch (X)
-            # J4 y J5 son P y funcionan bien en Horizontal (0,0,0)
+        elif self.axis_type == 'PITCH': # Pitch (X)
+            # J4 y J5 son PITCH y funcionan bien en Horizontal (0,0,0)
             if joint_index in [4, 5]:
                 self.rotation_x = 0
             else:
                 self.rotation_z = 90
-        elif self.axis_type == 'R': # Roll (Y)
-            # J1-J2 son R y funcionan bien enfrentando Z
+        elif self.axis_type == 'ROLL': # Roll (Y)
+            # J1-J2 son ROLL y funcionan bien enfrentando Z
             self.rotation_x = 90
 
     def on_mouse_enter(self):
@@ -132,13 +132,13 @@ class TranslationGizmo(Entity):
         self.btn_x = Button(parent=self, model='cube', scale=(axis_length, thick, thick), position=(axis_length/2, 0, 0), color=color.red, collider='box')
         self.arrow_x = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(axis_length, 0, 0), color=color.red, rotation=(0, 90, 0))
         
-        # --- Eje Y (Verde) ---
-        self.btn_y = Button(parent=self, model='cube', scale=(thick, axis_length, thick), position=(0, axis_length/2, 0), color=color.green, collider='box')
-        self.arrow_y = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, axis_length, 0), color=color.green, rotation=(-90, 0, 0))
+        # --- Eje Y (Verde) -> Ahora Horizontal (Z en Ursina) ---
+        self.btn_y = Button(parent=self, model='cube', scale=(thick, thick, axis_length), position=(0, 0, axis_length/2), color=color.green, collider='box')
+        self.arrow_y = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, 0, axis_length), color=color.green, rotation=(0, 0, 0))
         
-        # --- Eje Z (Azul) ---
-        self.btn_z = Button(parent=self, model='cube', scale=(thick, thick, axis_length), position=(0, 0, axis_length/2), color=color.blue, collider='box')
-        self.arrow_z = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, 0, axis_length), color=color.blue, rotation=(0, 0, 0))
+        # --- Eje Z (Azul) -> Ahora Vertical (Y en Ursina) ---
+        self.btn_z = Button(parent=self, model='cube', scale=(thick, axis_length, thick), position=(0, axis_length/2, 0), color=color.blue, collider='box')
+        self.arrow_z = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, axis_length, 0), color=color.blue, rotation=(-90, 0, 0))
 
         # Configuraciones de botones
         for btn in (self.btn_x, self.btn_y, self.btn_z):
@@ -168,10 +168,11 @@ class TranslationGizmo(Entity):
             if self.active_axis == 'x':
                 new_pos[0] += dx * speed
             elif self.active_axis == 'y':
-                new_pos[1] += dy * speed
-            elif self.active_axis == 'z':
-                # En Z usamos el movimiento vertical del ratón, igual que con Y, requiere sensibilidad
+                # En el nuevo sistema Y es Horizontal Forward (Z en Ursina)
                 new_pos[2] += dy * speed
+            elif self.active_axis == 'z':
+                # En el nuevo sistema Z es Vertical (Y en Ursina)
+                new_pos[1] += dy * speed
                 
             self.target.position = tuple(new_pos)
             self.position = self.target.position
@@ -229,9 +230,10 @@ class RobotArmSim:
                           texture_scale=(50,50), color=color.gray, collider='box')
 
         # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
+        # Ajustado para Z-up: Verde(Y) es Horizontal adelante, Azul(Z) es Vertical arriba
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
-        Entity(model='cube', color=color.green, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
-        Entity(model='cube', color=color.blue, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
+        Entity(model='cube', color=color.green, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
+        Entity(model='cube', color=color.blue, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
 
         # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
         self.robot_root = Entity(position=(0, -1.0, 0) )
@@ -290,12 +292,12 @@ class RobotArmSim:
 
         # Eje de rotación por junta
         self.joint_axes = {
-            "J0": "H",  # user request: H
-            "J1": "R",
-            "J2": "R",
-            "J3": "H",
-            "J4": "P",
-            "J5": "P",  # user request: P
+            "J0": "YAW",
+            "J1": "ROLL",
+            "J2": "ROLL",
+            "J3": "YAW",
+            "J4": "PITCH",
+            "J5": "PITCH",
         }
 
         self.angles = [0] * self.NUM_JOINTS
@@ -355,11 +357,11 @@ class RobotArmSim:
         if ctrl:
             axis = self.joint_axes[jname]
             rest = self.rest_hprs.get(jname, (0, 0, 0))
-            if axis == "H":
+            if axis == "YAW":
                 ctrl.setHpr(rest[0] + clamped, rest[1], rest[2])
-            elif axis == "P":
+            elif axis == "PITCH":
                 ctrl.setHpr(rest[0], rest[1] + clamped, rest[2])
-            elif axis == "R":
+            elif axis == "ROLL":
                 ctrl.setHpr(rest[0], rest[1], rest[2] + clamped)
 
     def _get_angle(self, joint_index):
@@ -573,14 +575,14 @@ class RobotArmSim:
         jname = self.JOINT_NAMES[index] if index < self.NUM_JOINTS else '?'
         if jname != '?':
             axis = self.joint_axes[jname]
-            axis_name = "Heading (Z)" if axis=="H" else "Pitch (X)" if axis=="P" else "Roll (Y)"
+            axis_name = "Yaw (Around Z-Up)" if axis=="YAW" else "Pitch (Around X-Right)" if axis=="PITCH" else "Roll (Around Y-Forward)"
             self.axis_text.text = f"Junta: {jname}\nEje: {axis} - {axis_name}\n[A] Cambiar"
             print(f"Junta seleccionada: {jname} (Eje actual: {axis} - {axis_name}) [Presiona 'A' para cambiar eje]")
 
     def cycle_axis(self):
         if self.selected_joint is not None:
             jname = self.JOINT_NAMES[self.selected_joint]
-            axes = ['H', 'P', 'R']
+            axes = ['YAW', 'PITCH', 'ROLL']
             current = self.joint_axes[jname]
             next_axis = axes[(axes.index(current) + 1) % 3]
             self.joint_axes[jname] = next_axis
@@ -592,7 +594,7 @@ class RobotArmSim:
                 ctrl.setHpr(rest[0], rest[1], rest[2])
             self._apply_angle(self.selected_joint, self.angles[self.selected_joint])
             
-            axis_name = "Heading (Z)" if next_axis=="H" else "Pitch (X)" if next_axis=="P" else "Roll (Y)"
+            axis_name = "Yaw (Around Z-Up)" if next_axis=="YAW" else "Pitch (Around X-Right)" if next_axis=="PITCH" else "Roll (Around Y-Forward)"
             self.axis_text.text = f"Junta: {jname}\nEje: {next_axis} - {axis_name}\n[A] Cambiar"
             print(f">>> Junta {jname} cambió a eje: {next_axis} ({axis_name})")
 
