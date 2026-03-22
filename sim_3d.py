@@ -65,11 +65,17 @@ class CircularJointSlider(Entity):
         self.pulse_time = 0
 
         # Orientación según el eje lógico de Panda3D
-        if self.axis_type == 'H': # Heading (Z) -> Plano horizontal
+        if self.axis_type == 'H': # Heading (Z)
+            # J0 y J3 son H y funcionan bien en Horizontal (rot_x=0)
             self.rotation_x = 0
-        elif self.axis_type == 'P': # Pitch (X) -> Girar para que mire a X
-            self.rotation_z = 90
-        elif self.axis_type == 'R': # Roll (Y) -> Girar para que mire a Y
+        elif self.axis_type == 'P': # Pitch (X)
+            # J4 y J5 son P y funcionan bien en Horizontal (0,0,0)
+            if joint_index in [4, 5]:
+                self.rotation_x = 0
+            else:
+                self.rotation_z = 90
+        elif self.axis_type == 'R': # Roll (Y)
+            # J1-J2 son R y funcionan bien enfrentando Z
             self.rotation_x = 90
 
     def on_mouse_enter(self):
@@ -86,6 +92,18 @@ class CircularJointSlider(Entity):
         elif key == 'left mouse up':
             self.dragging = False
             self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
+        
+        # Nueva funcionalidad: Tecla 'O' para rotar el slider si el ratón está encima
+        elif key == 'o' and mouse.hovered_entity == self:
+            # Ciclar entre las 3 orientaciones principales
+            if self.rotation_x == 0 and self.rotation_z == 0:
+                self.rotation_x = 90 # Cambiar a Facing Z
+            elif self.rotation_x == 90:
+                self.rotation_x = 0
+                self.rotation_z = 90 # Cambiar a Facing X
+            else:
+                self.rotation_x = 0
+                self.rotation_z = 0 # Volver a Horizontal
 
     def update(self):
         self.pulse_time += time.dt * 2
