@@ -21,7 +21,7 @@ class AnimationManagerMixin:
     """Mixin that adds visual timeline and animation playback to the main window.
 
     Expects the host class to provide:
-        self.saved_poses            (dict)          — {name: [a, b, c, d, e]}
+        self.saved_poses            (dict)          — {name: [a, b, c]}
         self.saved_animations       (dict)          — {name: [{pose, duration}, ...]}
         self.animations_file        (str)           — path to animations.json
         self.pose_icons_dir         (str)           — directory for thumbnails
@@ -422,14 +422,9 @@ class AnimationManagerMixin:
         self.interp_count = 0
 
         self.current_angles_f = [float(s.value()) for s in self.sliders]
-        
-        # Asegurar que target_angles tiene suficientes elementos (compat. poses con 3 ángulos)
-        while len(self.target_angles) < len(self.sliders):
-            self.target_angles.append(0)
-        
         self.interp_deltas = [
             (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
-            for i in range(len(self.sliders))
+            for i in range(3)
         ]
 
         self.interp_timer.start(int(1000 / fps))
@@ -438,7 +433,7 @@ class AnimationManagerMixin:
         """Called by interp_timer on each tick to advance the current interpolation step."""
         self.interp_count += 1
         if self.interp_count <= self.interp_steps:
-            for i in range(len(self.sliders)):
+            for i in range(3):
                 self.current_angles_f[i] += self.interp_deltas[i]
                 self.sliders[i].blockSignals(True)
                 self.sliders[i].setValue(int(round(self.current_angles_f[i])))
@@ -447,11 +442,10 @@ class AnimationManagerMixin:
         else:
             self.interp_timer.stop()
             # Snap to exact target values (eliminate float accumulation error)
-            for i in range(len(self.sliders)):
-                if i < len(self.target_angles):
-                    self.sliders[i].blockSignals(True)
-                    self.sliders[i].setValue(self.target_angles[i])
-                    self.sliders[i].blockSignals(False)
+            for i in range(3):
+                self.sliders[i].blockSignals(True)
+                self.sliders[i].setValue(self.target_angles[i])
+                self.sliders[i].blockSignals(False)
             self.send_angles()
 
             self.current_seq_index += self.playback_direction
