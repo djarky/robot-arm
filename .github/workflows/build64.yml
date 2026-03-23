@@ -1,0 +1,71 @@
+name: Build Ursina Arm Simulator
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  # ----------------------
+  # Linux 64 bits
+  # ----------------------
+  build-linux-64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pyinstaller ursina panda3d panda3d-gltf panda3d-simplepbr pyserial opencv-python mediapipe PySide6
+
+      - name: Build Linux 64-bit binary
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Upload Linux 64-bit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-64bit
+          path: dist/UrsinaArmSimulator
+
+
+  # ----------------------
+  # Windows 64 bits
+  # ----------------------
+  build-windows-64:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if exist requirements.txt ( pip install -r requirements.txt )
+          pip install pyinstaller ursina panda3d panda3d-gltf panda3d-simplepbr pyserial opencv-python mediapipe PySide6
+
+      - name: Build Windows 64-bit EXE
+        shell: cmd
+        run: build.bat
+
+      - name: Upload Windows 64-bit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-64bit
+          path: dist/UrsinaArmSimulator
