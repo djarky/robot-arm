@@ -250,24 +250,23 @@ class RobotArmSim:
         # ── Cargar modelo GLB con armadura ──
         model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb" )
         
-        # 1. Cargar el modelo estático para tener la base (pata4) que Actor descarta
-        self.static_model = Entity(parent=self.robot_root , texture ='texture.png')
-
+        # Cargar el modelo de una sola vez
+        panda_model = loader.loadModel(model_path)
         
-        try:
-            panda_model = loader.loadModel(model_path)
-            panda_model.reparentTo(self.static_model)
-            for np in panda_model.findAllMatches("**/+GeomNode"):
-                name = np.getName().lower()
-        except Exception as e:
-            print(f"Error cargando base estática: {e}")
-
-        # 2. Cargar el Actor para las partes animadas
-        self.actor = Actor(model_path )
-        self.actor_entity = Entity(parent=self.robot_root , texture ='texture.png')
+        # El Actor extrae las partes animadas (esqueleto) del panda_model
+        self.actor = Actor(panda_model)
+        
+        # panda_model ahora solo retiene las partes estáticas (como la base/pata4) que el Actor descartó.
+        # Emparentamos ambos a nuestra entidad base para que se rendericen como un solo objeto.
+        self.actor_entity = Entity(parent=self.robot_root, texture='texture.png')
+        
+        # Emparentar las partes animadas
         self.actor.reparentTo(self.actor_entity)
         self.actor.setScale(1)
         self.actor.setPos(0, 0, 0)
+        
+        # Emparentar las partes estáticas (base)
+        panda_model.reparentTo(self.actor_entity)
 
 
 
