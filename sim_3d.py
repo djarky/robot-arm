@@ -92,18 +92,6 @@ class CircularJointSlider(Entity):
         elif key == 'left mouse up':
             self.dragging = False
             self.color = color.rgba(self.base_color.r, self.base_color.g, self.base_color.b, 0.4)
-        
-        # Nueva funcionalidad: Tecla 'O' para rotar el slider si el ratón está encima
-        elif key == 'o' and mouse.hovered_entity == self:
-            # Ciclar entre las 3 orientaciones principales
-            if self.rotation_x == 0 and self.rotation_z == 0:
-                self.rotation_x = 90 # Cambiar a Facing Z
-            elif self.rotation_x == 90:
-                self.rotation_x = 0
-                self.rotation_z = 90 # Cambiar a Facing X
-            else:
-                self.rotation_x = 0
-                self.rotation_z = 0 # Volver a Horizontal
 
     def update(self):
         self.pulse_time += time.dt * 2
@@ -270,9 +258,6 @@ class RobotArmSim:
 
 
 
-        # Elemento UI para mostrar información de la junta
-        self.axis_text = Text(text="[Selecciona una junta (0-5)]", position=(-0.85, 0.45), scale=1.5, color=color.white)
-
         # Listar juntas para depuración
         print("=== Juntas del modelo ===")
         self.actor.listJoints()
@@ -316,8 +301,6 @@ class RobotArmSim:
         self.last_save_time = time.time()
         self.load_camera_config()
         
-        self.selected_joint = None
-        self.rotation_mode = False
         self.spawned_objects = []
         
         # Instanciar el Gizmo
@@ -510,26 +493,10 @@ class RobotArmSim:
                         pass # El clic en el gizmo se procesa en el propio gizmo
                     # Objeto spawneado (toy)
                     elif hasattr(mouse.hovered_entity, 'is_spawned_toy'):
-                        self.selected_joint = None
                         self.gizmo.attach_to(mouse.hovered_entity)
                 else:
                     # Deseleccionar al hacer clic en el vacío
                     self.gizmo.detach()
-
-        # Modo Rotación (Tecla R) — rota la junta seleccionada
-        if held_keys['r'] and self.selected_joint is not None:
-            self.rotation_mode = True
-        
-        if self.rotation_mode:
-            delta = mouse.velocity[0] * 200
-            if self.selected_joint is not None:
-                cur = self._get_angle(self.selected_joint)
-                self._apply_angle(self.selected_joint, cur + delta)
-            
-            self.sync_to_gui()
-            
-            if mouse.left: # Confirmar
-                self.rotation_mode = False
 
         # Control manual de fallback con el ratón (shift + clic)
         if held_keys['shift']:
@@ -569,34 +536,6 @@ class RobotArmSim:
 
 
 
-    def select_joint(self, index):
-        self.selected_joint = index
-        jname = self.JOINT_NAMES[index] if index < self.NUM_JOINTS else '?'
-        if jname != '?':
-            axis = self.joint_axes[jname]
-            axis_name = "Yaw (Around Z-Up)" if axis=="YAW" else "Pitch (Around X-Right)" if axis=="PITCH" else "Roll (Around Y-Forward)"
-            self.axis_text.text = f"Junta: {jname}\nEje: {axis} - {axis_name}\n[A] Cambiar"
-            print(f"Junta seleccionada: {jname} (Eje actual: {axis} - {axis_name}) [Presiona 'A' para cambiar eje]")
-
-    def cycle_axis(self):
-        if self.selected_joint is not None:
-            jname = self.JOINT_NAMES[self.selected_joint]
-            axes = ['YAW', 'PITCH', 'ROLL']
-            current = self.joint_axes[jname]
-            next_axis = axes[(axes.index(current) + 1) % 3]
-            self.joint_axes[jname] = next_axis
-            
-            # Reset all rotations on the control node to its rest pose before reapplying on new axis
-            ctrl = self.joint_controls.get(jname)
-            if ctrl:
-                rest = self.rest_hprs.get(jname, (0, 0, 0))
-                ctrl.setHpr(rest[0], rest[1], rest[2])
-            self._apply_angle(self.selected_joint, self.angles[self.selected_joint])
-            
-            axis_name = "Yaw (Around Z-Up)" if next_axis=="YAW" else "Pitch (Around X-Right)" if next_axis=="PITCH" else "Roll (Around Y-Forward)"
-            self.axis_text.text = f"Junta: {jname}\nEje: {next_axis} - {axis_name}\n[A] Cambiar"
-            print(f">>> Junta {jname} cambió a eje: {next_axis} ({axis_name})")
-
 sim = RobotArmSim()
 
 def update():
@@ -609,15 +548,6 @@ def input(key):
     elif key == 'escape':
         if sim.gizmo.enabled:
             sim.gizmo.detach()
-            sim.selected_joint = None
-    # Selección de junta con teclas numéricas 0-4
-    elif key in ['0', '1', '2', '3', '4','5']:
-        idx = int(key)
-        if idx < sim.NUM_JOINTS:
-            sim.select_joint(idx)
-    # Ciclar eje de rotación con tecla 'A'
-    elif key == 'a':
-        sim.cycle_axis()
 
 # Bucle principal de Ursina
 app.run()
