@@ -3,6 +3,22 @@ import socket
 import json
 import os
 import math
+
+# --- FIX PYINSTALLER: Registrar Loader GLTF manualmente ---
+# En entornos congelados, Panda3D no siempre encuentra los entry points de los plugins
+from panda3d.core import load_prc_file_data
+load_prc_file_data("", "load-file-type gltf gltf")
+load_prc_file_data("", "load-file-type glb gltf")
+import gltf
+import simplepbr
+# --------------------------------------------------------
+
+# Intentar habilitar PBR para que el modelo GLTF se vea bien
+try:
+    simplepbr.init()
+except:
+    pass
+
 from ursina import *
 from panda3d.core import ConfigVariableString, NodePath
 from direct.actor.Actor import Actor
@@ -238,47 +254,54 @@ class RobotArmSim:
         # ── Cargar modelo GLB con armadura ──
         model_path = os.path.join(os.path.dirname(__file__), "robot_arm_sha.glb" )
         
-        # Cargar el modelo de una sola vez
-        panda_model = loader.loadModel(model_path)
+        # Cargamos el modelo usando la librería gltf directamente para evitar problemas con el registro de Panda3D
+        import gltf
+        from panda3d.core import NodePath
+        panda_model_node = gltf.load_model(model_path)
+        panda_model = NodePath(panda_model_node) # Envolver en NodePath es vital para Actor
         
-        # El Actor extrae las partes animadas (esqueleto) del panda_model
-        self.actor = Actor(panda_model)
+        # Usamos copy=False para que Actor use el NodePath directamente en lugar de intentar recargarlo
+        # a través del sistema de archivos interno de Panda3D (que suele fallar aquí).
+        self.actor = Actor(panda_model, copy=False)
         
-        # El Actor crea copias de las partes animadas, dejando las originales en panda_model.
-        # Para evitar tener el robot dibujado dos veces (y en tamaños diferentes),
-        # borramos los Nodos de tipo Character del panda_model original:
-        for char_node in panda_model.findAllMatches("**/+Character"):
-            char_node.removeNode()
-            
-        # panda_model ahora solo retiene las partes estáticas (como la base/pata4) que el Actor ignoró.
-        # Emparentamos ambos a nuestra entidad base para que se rendericen como un solo objeto.
+        # Para evitar duplicados si hay partes que Actor y panda_model comparten, 
+        # y para asegurar que todo sea visible:
         self.actor_entity = Entity(parent=self.robot_root, texture='texture.png')
         
-        # Emparentar las partes animadas
+        # Emparentar el actor a la escena de Ursina
         self.actor.reparentTo(self.actor_entity)
         self.actor.setScale(1)
         self.actor.setPos(0, 0, 0)
         
-        # Emparentar las partes estáticas (base)
+        # También emparentamos el panda_model original por si tiene partes estáticas 
+        # que el Actor no haya incluido (como la base fija)
         panda_model.reparentTo(self.actor_entity)
-
-
-
-        # Listar juntas para depuración
+        
+        # Depuración de partes y juntas
+        print(f"=== Partnames: {self.actor.getPartNames()} ===")
         print("=== Juntas del modelo ===")
         self.actor.listJoints()
 
         # Obtener nodos controlables para cada junta
         self.joint_controls = {}
         self.rest_hprs = {}  # Guardar la rotación original (rest pose) de cada junta
+        # Obtener nodos controlables para cada junta
+        self.joint_controls = {}
+        self.rest_hprs = {}  # Guardar la rotación original (rest pose) de cada junta
+        
+        # Intentar obtener el nombre de la parte principal (usualmente 'modelRoot' o 'default')
+        pnames = self.actor.getPartNames()
+        primary_part = pnames[0] if pnames else "modelRoot"
+        
         for jname in self.JOINT_NAMES:
             try:
-                ctrl = self.actor.controlJoint(None, "modelRoot", jname)
+                # Usar el nombre de la parte detectado
+                ctrl = self.actor.controlJoint(None, primary_part, jname)
                 self.joint_controls[jname] = ctrl
                 self.rest_hprs[jname] = ctrl.getHpr()
                 print(f"  controlJoint('{jname}') → OK | Rest HPR: {self.rest_hprs[jname]}")
             except Exception as e:
-                print(f"  controlJoint('{jname}') → FALLO: {e}")
+                print(f"  controlJoint('{jname}') → FALLO en parte '{primary_part}': {e}")
 
         # Eje de rotación por junta
         self.joint_axes = {
