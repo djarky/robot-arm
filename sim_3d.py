@@ -40,7 +40,7 @@ class CircularJointSlider(Entity):
         segments = 32 # Antes 100, mucho más ligero
         path = [Vec3(math.cos(math.radians(i*(360/segments)))*radius, 0, math.sin(math.radians(i*(360/segments)))*radius) for i in range(segments + 1)]
             
-        thickness = 0.05 
+        thickness = 0.1 
         cross_segments = 8 # Antes 12
         cross_section = [Vec3(math.cos(math.radians(i*(360/cross_segments)))*thickness, math.sin(math.radians(i*(360/cross_segments)))*thickness, 0) for i in range(cross_segments + 1)]
         
@@ -244,7 +244,13 @@ class RobotArmSim:
         # El Actor extrae las partes animadas (esqueleto) del panda_model
         self.actor = Actor(panda_model)
         
-        # panda_model ahora solo retiene las partes estáticas (como la base/pata4) que el Actor descartó.
+        # El Actor crea copias de las partes animadas, dejando las originales en panda_model.
+        # Para evitar tener el robot dibujado dos veces (y en tamaños diferentes),
+        # borramos los Nodos de tipo Character del panda_model original:
+        for char_node in panda_model.findAllMatches("**/+Character"):
+            char_node.removeNode()
+            
+        # panda_model ahora solo retiene las partes estáticas (como la base/pata4) que el Actor ignoró.
         # Emparentamos ambos a nuestra entidad base para que se rendericen como un solo objeto.
         self.actor_entity = Entity(parent=self.robot_root, texture='texture.png')
         
@@ -323,8 +329,8 @@ class RobotArmSim:
                 slider.position = (0,0,0) # Centrado en la junta
                 
                 # El robot mide aprox 100 unidades según el diagnóstico.
-                # Aumentamos a 15.0 según petición del usuario (150-200% del anterior 8.0)
-                slider.world_scale = 15.0 
+                # Aumentamos a 12.0 según petición del usuario (150-200% del anterior 8.0)
+                slider.world_scale = 12.0 
                 
                 self.joint_sliders.append(slider)
 
