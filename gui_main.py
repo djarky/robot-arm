@@ -304,6 +304,29 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
             print(f"Arduino Error: {error_msg}")
 
     # ------------------------------------------------------------------
+    # Simulation
+    # ------------------------------------------------------------------
+
+    def launch_simulation(self):
+        """Launch the Ursina 3-D simulation embedded in sim_container."""
+        win_id = str(int(self.sim_container.winId()))
+        width = str(self.sim_container.width())
+        height = str(self.sim_container.height())
+        if getattr(sys, 'frozen', False):
+            sim_executable = os.path.join(os.path.dirname(sys.executable), 'sim_3d')
+            if sys.platform == 'win32':
+                sim_executable += '.exe'
+            self.sim_proc = subprocess.Popen(
+                [sim_executable, win_id, width, height]
+            )
+        else:
+            self.sim_proc = subprocess.Popen(
+                [sys.executable, "sim_3d.py", win_id, width, height]
+            )
+        self.btn_launch_sim.setEnabled(False)
+        self.btn_launch_sim.setText("Simulación Iniciada")
+
+    # ------------------------------------------------------------------
     # Camera integration
     # ------------------------------------------------------------------
 
