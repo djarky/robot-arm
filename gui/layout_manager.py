@@ -45,12 +45,6 @@ class LayoutMixin:
         self.btn_toggle_cam = QPushButton("Activar Seguimiento")
         self.btn_toggle_cam.clicked.connect(self.toggle_camera)
 
-        self.btn_handedness = QPushButton("Modo: Diestro (Derecha)")
-        self.btn_handedness.setStyleSheet(
-            "background-color: #0d47a1; color: white; border-radius: 3px; padding: 2px;"
-        )
-        self.btn_handedness.clicked.connect(self.toggle_handedness)
-
         self.cam_status_label = QLabel("SISTEMA: DESACTIVADO")
         self.cam_status_label.setAlignment(Qt.AlignCenter)
         self.cam_status_label.setStyleSheet(
@@ -59,7 +53,6 @@ class LayoutMixin:
 
         layout.addWidget(self.cam_label)
         layout.addWidget(self.cam_status_label)
-        layout.addWidget(self.btn_handedness)
         layout.addWidget(self.btn_toggle_cam)
         group.setLayout(layout)
         self.right_layout.addWidget(group)
@@ -78,15 +71,6 @@ class LayoutMixin:
             s.valueChanged.connect(self.send_angles)
             joint_layout.addRow(f"{joint_labels[i]}:", s)
             self.sliders.append(s)
-
-        # Collision indicator LED
-        self.collision_indicator = QLabel("● OK")
-        self.collision_indicator.setStyleSheet(
-            "color: #4CAF50; font-size: 14px; font-weight: bold;"
-        )
-        self.collision_indicator.setToolTip("Sin colisión")
-        joint_layout.addRow("Colisión:", self.collision_indicator)
-
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
 
