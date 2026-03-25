@@ -1,7 +1,32 @@
-# -*- mode: python ; coding: utf-8 -*-
-
 import os
+import struct
+import json
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, copy_metadata
+
+# --- Automate GLTF Header Extraction ---
+def run_header_extraction():
+    glb_path = 'robot_arm_sha.glb'
+    output_path = 'gltf_header.json'
+    if not os.path.exists(glb_path):
+        return
+    try:
+        with open(glb_path, 'rb') as f:
+            # Skip GLB header (12 bytes)
+            f.seek(12)
+            # Read Chunk 0 length and type
+            chunk_length = struct.unpack('<I', f.read(4))[0]
+            chunk_type = f.read(4)
+            if chunk_type == b'JSON':
+                json_data = f.read(chunk_length).decode('utf-8').strip('\x00')
+                data = json.loads(json_data)
+                with open(output_path, 'w') as out:
+                    json.dump(data, out, indent=4)
+                print(f"Spec-Build: Successfully updated {output_path} from {glb_path}")
+    except Exception as e:
+        print(f"Spec-Build Warning: Failed to extract GLTF header: {e}")
+
+run_header_extraction()
+# ---------------------------------------
 
 block_cipher = None
 
