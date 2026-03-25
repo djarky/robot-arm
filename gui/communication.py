@@ -10,7 +10,9 @@ import json
 import serial
 import serial.tools.list_ports
 import sys
+import os
 import time
+import subprocess
 from PySide6.QtCore import QTimer
 
 
@@ -68,6 +70,25 @@ class CommunicationMixin:
         """Tell the simulation to reset its camera view."""
         msg = json.dumps({"type": "reset_camera"})
         self.sock.sendto(msg.encode(), self.target_addr)
+
+    def launch_simulation(self):
+        """Launch the Ursina 3-D simulation embedded in sim_container."""
+        win_id = str(int(self.sim_container.winId()))
+        width = str(self.sim_container.width())
+        height = str(self.sim_container.height())
+        if getattr(sys, 'frozen', False):
+            sim_executable = os.path.join(os.path.dirname(sys.executable), 'sim_3d')
+            if sys.platform == 'win32':
+                sim_executable += '.exe'
+            self.sim_proc = subprocess.Popen(
+                [sim_executable, win_id, width, height]
+            )
+        else:
+            self.sim_proc = subprocess.Popen(
+                [sys.executable, "sim_3d.py", win_id, width, height]
+            )
+        self.btn_launch_sim.setEnabled(False)
+        self.btn_launch_sim.setText("Simulación Iniciada")
 
     # ------------------------------------------------------------------
     # UDP feedback from simulation
