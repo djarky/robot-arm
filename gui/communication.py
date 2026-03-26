@@ -98,7 +98,7 @@ class CommunicationMixin:
         """Poll the receive socket and sync slider values from simulation feedback."""
         try:
             while True:
-                data, _ = self.recv_sock.recvfrom(1024)
+                data, _ = self.recv_sock.recvfrom(4096)
                 msg = json.loads(data.decode())
                 if msg.get("type") == "sync_angles":
                     angles = msg["data"]
@@ -107,6 +107,16 @@ class CommunicationMixin:
                             self.sliders[i].blockSignals(True)
                             self.sliders[i].setValue(int(angle))
                             self.sliders[i].blockSignals(False)
+                elif msg.get("type") == "path_result":
+                    # Sim has computed a collision-safe path
+                    waypoints = msg.get("waypoints", [])
+                    duration = msg.get("duration", 1.0)
+                    evasion = msg.get("evasion", False)
+                    if evasion:
+                        print(f"[Collision] Evasion path with {len(waypoints)} waypoints")
+                    self._execute_safe_path(waypoints, duration, evasion)
+                elif msg.get("type") == "collision_status":
+                    self._update_collision_indicator(msg)
         except BlockingIOError:
             pass
         except Exception as e:
@@ -279,3 +289,97 @@ class CommunicationMixin:
                 json.dump(config, f, indent=4)
         except Exception as e:
             print(f"Error saving config: {e}")
+
+    # ------------------------------------------------------------------
+    # Collision-aware path execution
+    # ------------------------------------------------------------------
+
+    def _execute_safe_path(self, waypoints, original_duration, evasion_needed):
+        """Execute waypoints returned by the sim's collision interpolator.
+
+        If evasion was needed, the waypoints list has 3 entries
+        (lift, transit, lower) and we split the original duration
+        across them (half-speed per sub-phase).
+
+        This method converts the waypoints into the existing
+        interpolation machinery used by AnimationManagerMixin.
+        """
+        if not waypoints:
+            return
+
+        if evasion_needed and len(waypoints) > 1:
+            # Distribute time: each sub-phase gets duration / num_waypoints
+            sub_duration = original_duration / len(waypoints)
+            # Build an expanded sequence and play it
+            self._pending_safe_waypoints = []
+            for wp in waypoints:
+                self._pending_safe_waypoints.append({
+                    "angles": wp,
+                    "duration": sub_duration
+                })
+        else:
+            self._pending_safe_waypoints = [{
+                "angles": waypoints[0],
+                "duration": original_duration
+            }]
+
+        # Start playing the first waypoint
+        self._safe_wp_index = 0
+        self._play_next_safe_waypoint()
+
+    def _play_next_safe_waypoint(self):
+        """Play one waypoint from the safe path, then advance."""
+        if not hasattr(self, '_pending_safe_waypoints'):
+            return
+        if self._safe_wp_index >= len(self._pending_safe_waypoints):
+            # Done with safe path — continue the main animation sequence
+            del self._pending_safe_waypoints
+            del self._safe_wp_index
+            # Advance the main sequence
+            if hasattr(self, 'current_seq_index') and hasattr(self, 'playback_direction'):
+                self.current_seq_index += self.playback_direction
+                self.start_next_in_sequence()
+            return
+
+        wp = self._pending_safe_waypoints[self._safe_wp_index]
+        self.target_angles = wp["angles"]
+        duration = max(wp["duration"], 0.05)
+
+        fps = 30
+        self.interp_steps = max(1, int(duration * fps))
+        self.interp_count = 0
+
+        self.current_angles_f = [float(s.value()) for s in self.sliders]
+
+        # Pad target if necessary
+        while len(self.target_angles) < len(self.sliders):
+            self.target_angles.append(0)
+
+        self.interp_deltas = [
+            (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
+            for i in range(len(self.sliders))
+        ]
+
+        # Override the completion callback so it chains to the next waypoint
+        self._safe_path_active = True
+        self._safe_wp_index += 1
+        self.interp_timer.start(int(1000 / fps))
+
+    def _update_collision_indicator(self, msg):
+        """Update the collision LED indicator in the GUI."""
+        if not hasattr(self, 'collision_indicator'):
+            return
+        colliding = msg.get("colliding", False)
+        joints = msg.get("joints", [])
+        if colliding:
+            self.collision_indicator.setText("● COLISIÓN")
+            self.collision_indicator.setStyleSheet(
+                "color: #f44336; font-size: 14px; font-weight: bold;"
+            )
+            self.collision_indicator.setToolTip(f"Probes: {', '.join(joints)}")
+        else:
+            self.collision_indicator.setText("● OK")
+            self.collision_indicator.setStyleSheet(
+                "color: #4CAF50; font-size: 14px; font-weight: bold;"
+            )
+            self.collision_indicator.setToolTip("Sin colisión")

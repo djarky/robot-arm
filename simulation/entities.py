@@ -70,7 +70,11 @@ class CircularJointSlider(Entity):
             # Usar velocidad del ratón para incrementar el ángulo
             delta = mouse.velocity[0] + mouse.velocity[1]
             current_angle = self.sim._get_angle(self.joint_index)
-            self.sim._apply_angle(self.joint_index, current_angle + delta * 500)
+            accepted = self.sim._apply_angle(self.joint_index, current_angle + delta * 500)
+            if not accepted:
+                # Flash rojo para indicar colisión
+                self.color = color.rgba(1, 0, 0, 0.9)
+                invoke(setattr, self, 'color', color.yellow, delay=0.1)
             self.sim.sync_to_gui()
 
 class TransformationGizmo(Entity):

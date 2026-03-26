@@ -53,6 +53,8 @@ def input(key):
     if key == 'delete':
         if sim.gizmo.enabled and sim.gizmo.target:
             sim.gizmo.delete_target()
+    elif key == 'f3':
+        sim.collision_mgr.toggle_debug()
 
 # Bucle principal de Ursina
 if __name__ == '__main__':

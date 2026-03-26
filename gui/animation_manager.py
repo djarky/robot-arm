@@ -417,21 +417,44 @@ class AnimationManagerMixin:
 
         duration = max(duration, 0.05)  # Minimum 50 ms to avoid div-by-zero
 
+        # ── Request collision-safe path from the simulation ──
+        # Instead of starting interpolation directly, we ask the sim
+        # to check whether the direct path collides with the floor.
+        # The sim will reply with a path_result message handled by
+        # CommunicationMixin.sync_from_sim → _execute_safe_path.
+        import json
+        current = [float(s.value()) for s in self.sliders]
+        msg = json.dumps({
+            "type": "plan_path",
+            "start": current,
+            "end": list(self.target_angles),
+            "duration": duration
+        })
+        try:
+            self.sock.sendto(msg.encode(), self.target_addr)
+        except Exception as e:
+            print(f"[Collision] Failed to send plan_path: {e}")
+            # Fallback: play directly without collision check
+            self._start_direct_interpolation(duration)
+
+    def _start_direct_interpolation(self, duration):
+        """Start interpolation directly (no collision check), used as fallback."""
         fps = 30
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
 
         self.current_angles_f = [float(s.value()) for s in self.sliders]
-        
-        # Asegurar que target_angles tiene suficientes elementos (compat. poses con 3 ángulos)
+
+        # Pad target angles if necessary
         while len(self.target_angles) < len(self.sliders):
             self.target_angles.append(0)
-        
+
         self.interp_deltas = [
             (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
             for i in range(len(self.sliders))
         ]
 
+        self._safe_path_active = False
         self.interp_timer.start(int(1000 / fps))
 
     def update_interpolation(self):
@@ -454,5 +477,10 @@ class AnimationManagerMixin:
                     self.sliders[i].blockSignals(False)
             self.send_angles()
 
-            self.current_seq_index += self.playback_direction
-            self.start_next_in_sequence()
+            # Check if we're playing a safe (evasion) path
+            if getattr(self, '_safe_path_active', False):
+                # Chain to the next waypoint in the safe path
+                self._play_next_safe_waypoint()
+            else:
+                self.current_seq_index += self.playback_direction
+                self.start_next_in_sequence()
