@@ -155,8 +155,9 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
         self.playback_direction = 1
 
         # Camera smoothing state
-        self.smooth_camera_angles = [0.0, 0.0, 0.0]  # Solo 3 ejes para tracking de cámara
+        self.smooth_camera_angles = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 6 ejes para tracking de cámara
         self.camera_active_last_frame = False
+        self.is_left_handed = False
 
     def on_packet_received(self, success, error_msg=None):
         """Visual feedback when a packet is confirmed by Arduino."""
@@ -208,12 +209,12 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
         
         # 1. Process data (Logic + Drawing) via Mixin
         frame, angles, arm_visible, low_confidence = self.process_pose_data(
-            frame_in, pose_landmarks_list, is_playing
+            frame_in, pose_landmarks_list, hand_landmarks_list, is_playing, self.is_left_handed
         )
         
         # 2. Update Simulation/Arduino if tracking is active
         if not is_playing and arm_visible:
-            # angles contains [base, shoulder, elbow]
+            # angles contains [base, shoulder, elbow, j3, j4, j5]
             for i, angle in enumerate(angles):
                 if i < len(self.sliders):
                     self.sliders[i].blockSignals(True)
