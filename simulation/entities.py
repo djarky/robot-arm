@@ -73,102 +73,309 @@ class CircularJointSlider(Entity):
             self.sim._apply_angle(self.joint_index, current_angle + delta * 500)
             self.sim.sync_to_gui()
 
-class TranslationGizmo(Entity):
+class TransformationGizmo(Entity):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.target = None
+        self.mode = None # 'translate', 'rotate', 'scale'
+        self.lock_axis = None # 'x', 'y', 'z'
         
-        # Color axes: Red=X, Green=Y, Blue=Z.
-        axis_length = 1.5
-        arrow_size = 0.2
-        thick = 0.05
+        # Geometría base (X=Rojo, Y=Verde/Z-Ursina, Z=Azul/Y-Ursina)
+        # Adaptado al sistema Z-up de la simulación
+        self.axis_length = 1.5
+        self.thick = 0.05
         
-        # --- Eje X (Rojo) ---
-        self.btn_x = Button(parent=self, model='cube', scale=(axis_length, thick, thick), position=(axis_length/2, 0, 0), color=color.red, collider='box')
-        self.arrow_x = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(axis_length, 0, 0), color=color.red, rotation=(0, 90, 0))
+        # Grupos de visualización
+        self.visuals_translate = Entity(parent=self, enabled=True)
+        self.visuals_rotate = Entity(parent=self, enabled=False)
+        self.visuals_scale = Entity(parent=self, enabled=False)
         
-        # --- Eje Y (Verde) -> Ahora Horizontal (Z en Ursina) ---
-        self.btn_y = Button(parent=self, model='cube', scale=(thick, thick, axis_length), position=(0, 0, axis_length/2), color=color.green, collider='box')
-        self.arrow_y = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, 0, axis_length), color=color.green, rotation=(0, 0, 0))
+        self.setup_visuals()
         
-        # --- Eje Z (Azul) -> Ahora Vertical (Y en Ursina) ---
-        self.btn_z = Button(parent=self, model='cube', scale=(thick, axis_length, thick), position=(0, axis_length/2, 0), color=color.blue, collider='box')
-        self.arrow_z = Entity(parent=self, model='cube', scale=(arrow_size, arrow_size, arrow_size*2), position=(0, axis_length, 0), color=color.blue, rotation=(-90, 0, 0))
+        self.active_axis = None
+        self.original_transform = None
+        self.drag_start_mouse = Vec2(0,0)
+        
+        self.target_original_color = None
+        self.disable()
 
-        # Configuraciones de botones
-        for btn in (self.btn_x, self.btn_y, self.btn_z):
+    def setup_visuals(self):
+        # --- Traslación ---
+        self.btn_tx = Button(parent=self.visuals_translate, model='cube', scale=(self.axis_length, self.thick, self.thick), 
+                           position=(self.axis_length/2, 0, 0), color=color.red, collider='box')
+        self.btn_ty = Button(parent=self.visuals_translate, model='cube', scale=(self.thick, self.thick, self.axis_length), 
+                           position=(0, 0, self.axis_length/2), color=color.green, collider='box')
+        self.btn_tz = Button(parent=self.visuals_translate, model='cube', scale=(self.thick, self.axis_length, self.thick), 
+                           position=(0, self.axis_length/2, 0), color=color.blue, collider='box')
+        
+        # Flechas (Puntas)
+        self.tip_tx = Entity(parent=self.visuals_translate, model='sphere', scale=0.15, position=(self.axis_length, 0, 0), color=color.red)
+        self.tip_ty = Entity(parent=self.visuals_translate, model='sphere', scale=0.15, position=(0, 0, self.axis_length), color=color.green)
+        self.tip_tz = Entity(parent=self.visuals_translate, model='sphere', scale=0.15, position=(0, self.axis_length, 0), color=color.blue)
+
+        # --- Rotación (Anillos) ---
+        self.setup_rotation_visuals()
+        
+        # --- Escala ---
+        self.btn_sx = Button(parent=self.visuals_scale, model='cube', scale=(self.axis_length, self.thick, self.thick), 
+                           position=(self.axis_length/2, 0, 0), color=color.red, collider='box')
+        self.btn_sy = Button(parent=self.visuals_scale, model='cube', scale=(self.thick, self.thick, self.axis_length), 
+                           position=(0, 0, self.axis_length/2), color=color.green, collider='box')
+        self.btn_sz = Button(parent=self.visuals_scale, model='cube', scale=(self.thick, self.axis_length, self.thick), 
+                           position=(0, self.axis_length/2, 0), color=color.blue, collider='box')
+        
+        self.tip_sx = Entity(parent=self.visuals_scale, model='cube', scale=0.15, position=(self.axis_length, 0, 0), color=color.red)
+        self.tip_sy = Entity(parent=self.visuals_scale, model='cube', scale=0.15, position=(0, 0, self.axis_length), color=color.green)
+        self.tip_sz = Entity(parent=self.visuals_scale, model='cube', scale=0.15, position=(0, self.axis_length, 0), color=color.blue)
+
+        # Mapeo de ejes para visualización dinámica
+        self.axis_entities = {
+            'translate': {'x': [self.btn_tx, self.tip_tx], 'y': [self.btn_ty, self.tip_ty], 'z': [self.btn_tz, self.tip_tz]},
+            'rotate': {'x': [self.rot_x], 'y': [self.rot_y], 'z': [self.rot_z]},
+            'scale': {'x': [self.btn_sx, self.tip_sx], 'y': [self.btn_sy, self.tip_sy], 'z': [self.btn_sz, self.tip_sz]}
+        }
+
+        # Configuración común
+        all_interactive = (self.btn_tx, self.btn_ty, self.btn_tz, self.btn_sx, self.btn_sy, self.btn_sz, 
+                          self.rot_x, self.rot_y, self.rot_z)
+        for btn in all_interactive:
             btn.highlight_color = color.yellow
             btn.pressed_color = color.white
             btn.on_click = self.start_drag
-        
-        self.active_axis = None
-        self.original_target_pos = None
-        self.drag_start_mouse_y = 0
-        self.drag_start_mouse_x = 0
-        
-        # Iniciar apagado
-        self.disable()
 
-    def update(self):
-        if self.target and self.active_axis:
-            # Calcular delta respecto al movimiento del ratón
-            # Ursina normaliza la posición del mouse entre -0.5 y 0.5
-            dx = mouse.x - self.drag_start_mouse_x
-            dy = mouse.y - self.drag_start_mouse_y
-            
-            # Ajustar velocidad
-            speed = 20
-            
-            new_pos = list(self.original_target_pos)
-            if self.active_axis == 'x':
-                new_pos[0] += dx * speed
-            elif self.active_axis == 'y':
-                # En el nuevo sistema Y es Horizontal Forward (Z en Ursina)
-                new_pos[2] += dy * speed
-            elif self.active_axis == 'z':
-                # En el nuevo sistema Z es Vertical (Y en Ursina)
-                new_pos[1] += dy * speed
-                
-            self.target.position = tuple(new_pos)
-            self.position = self.target.position
-            
-        elif self.target:
-            self.position = self.target.position
-
-    def input(self, key):
-        if key == 'left mouse up' and self.active_axis:
-            self.stop_drag()
-            
-    def start_drag(self):
-        self.active_axis = None
-        if mouse.hovered_entity == self.btn_x: self.active_axis = 'x'
-        elif mouse.hovered_entity == self.btn_y: self.active_axis = 'y'
-        elif mouse.hovered_entity == self.btn_z: self.active_axis = 'z'
+    def setup_rotation_visuals(self):
+        res = 24
+        path = [Vec3(math.cos(math.radians(i*(360/res))), 0, math.sin(math.radians(i*(360/res)))) for i in range(res+1)]
+        cs = [Vec3(math.cos(math.radians(i*(360/8)))*0.02, math.sin(math.radians(i*(360/8)))*0.02, 0) for i in range(9)]
         
-        if self.active_axis:
-            self.original_target_pos = self.target.position
-            self.drag_start_mouse_x = mouse.x
-            self.drag_start_mouse_y = mouse.y
-            
-    def stop_drag(self):
-        self.active_axis = None
+        self.rot_x = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.red, rotation_z=90, collider='mesh')
+        self.rot_y = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.green, collider='mesh')
+        self.rot_z = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.blue, rotation_x=90, collider='mesh')
 
     def attach_to(self, entity):
-        self.target = entity
-        self.position = entity.position
-        self.enable()
+        if self.target == entity: return
         
+        if self.target:
+            self.detach()
+            
+        self.target = entity
+        # Guardar copia real del color para no perderlo
+        self.target_original_color = color.Color(entity.color[0], entity.color[1], entity.color[2], entity.color[3])
+        
+        self.position = entity.position
+        obj_size = max(entity.scale_x, entity.scale_y, entity.scale_z)
+        self.world_scale = max(1.0, obj_size * 1.5)
+        self.mode = None
+        
+        # Ocultar gizmo inicialmente
+        self.visuals_translate.enabled = False
+        self.visuals_rotate.enabled = False
+        self.visuals_scale.enabled = False
+        self.enable()
+
     def detach(self):
+        if self.target and self.target_original_color:
+            self.target.color = self.target_original_color
         self.target = None
+        self.target_original_color = None
         self.disable()
 
-    def delete_target(self):
-        if self.target:
-            obj = self.target
-            self.detach() # Soltar el objeto
+    def input(self, key):
+        if not self.target: return
+
+        # Atajos de Blender
+        if key == 'g': # Grab / Move
+            self.mode = 'translate'
+            self.visuals_translate.enabled = True
+            self.visuals_rotate.enabled = False
+            self.visuals_scale.enabled = False
+            self.start_keyboard_op()
+        elif key == 'r': # Rotate
+            self.mode = 'rotate'
+            self.visuals_translate.enabled = False
+            self.visuals_rotate.enabled = True
+            self.visuals_scale.enabled = False
+            self.start_keyboard_op()
+        elif key == 's': # Scale
+            self.mode = 'scale'
+            self.visuals_translate.enabled = False
+            self.visuals_rotate.enabled = False
+            self.visuals_scale.enabled = True
+            self.start_keyboard_op()
+        elif key == 'x' and not self.mode: # Delete
+            self.delete_target()
+        
+        # Bloqueo de ejes (solo si hay modo activo)
+        if self.mode:
+            if key == 'x': self.lock_axis = 'x'
+            elif key == 'y': self.lock_axis = 'y'
+            elif key == 'z': self.lock_axis = 'z'
             
-            # Quitar de la lista de la simulación
-            if hasattr(scene, 'sim_instance') and obj in scene.sim_instance.spawned_objects:
-                scene.sim_instance.spawned_objects.remove(obj)
+        # Confirmar / Cancelar
+        if key == 'left mouse down' and self.mode:
+            self.confirm_op()
+            
+        if key == 'escape':
+            if self.mode:
+                self.cancel_op()
+            self.detach() # Soltar para reactivar físicas
+            print("Deseleccionado y físicas activas")
+        elif key == 'right mouse down' and self.mode:
+            self.cancel_op()
+            
+        # Soltar ratón tras arrastre manual
+        if key == 'left mouse up' and self.active_axis:
+            self.active_axis = None
+
+    def start_keyboard_op(self):
+        self.lock_axis = None
+        self.active_axis = 'keyboard'
+        self.original_transform = {
+            'pos': Vec3(*self.target.position),
+            'rot': Vec3(*self.target.rotation),
+            'scale': Vec3(*self.target.scale)
+        }
+        self.drag_start_mouse = Vec2(mouse.x, mouse.y)
+        # Asegurar que el gizmo sea visible al iniciar operación de teclado
+        if self.mode == 'translate': self.visuals_translate.enabled = True
+        elif self.mode == 'rotate': self.visuals_rotate.enabled = True
+        elif self.mode == 'scale': self.visuals_scale.enabled = True
+        self.refresh_visual_colors()
+
+    def start_drag(self):
+        # Detectar qué botón se presionó
+        self.active_axis = None
+        h = mouse.hovered_entity
+        if h in (self.btn_tx, self.btn_sx, self.rot_x): self.active_axis = 'x'
+        elif h in (self.btn_ty, self.btn_sy, self.rot_y): self.active_axis = 'y'
+        elif h in (self.btn_tz, self.btn_sz, self.rot_z): self.active_axis = 'z'
+        
+        if self.active_axis:
+            self.original_transform = {
+                'pos': Vec3(*self.target.position),
+                'rot': Vec3(*self.target.rotation),
+                'scale': Vec3(*self.target.scale)
+            }
+            self.drag_start_mouse = Vec2(mouse.x, mouse.y)
+            # Determinar modo si no está ya activo por teclado
+            if h in (self.btn_tx, self.btn_ty, self.btn_tz): self.mode = 'translate'
+            elif h in (self.btn_sx, self.btn_sy, self.btn_sz): self.mode = 'scale'
+            elif h in (self.rot_x, self.rot_y, self.rot_z): self.mode = 'rotate'
+
+    def update(self):
+        if not self.target: return
+        
+        # Efecto de parpadeo (blinking) cuando está seleccionado sin modo activo
+        if not self.mode:
+            import time
+            # Pulsar entre color original y cian vibrante
+            s = (math.sin(time.time() * 10) + 1) / 2 # 0 a 1
+            t = 0.4 + s * 0.6
+            c1 = self.target_original_color
+            c2 = color.cyan
+            self.target.color = color.Color(
+                c1[0] + (c2[0] - c1[0]) * t,
+                c1[1] + (c2[1] - c1[1]) * t,
+                c1[2] + (c2[2] - c1[2]) * t,
+                c1[3] + (c2[3] - c1[3]) * t
+            )
+        
+        if not self.active_axis: return
+        
+        self.position = self.target.position
+        
+        # Bloqueo de ejes visuales dinámicos
+        if self.mode and self.active_axis == 'keyboard':
+            self.refresh_visual_colors()
+            
+        dx = (mouse.x - self.drag_start_mouse.x) * 20
+        dy = (mouse.y - self.drag_start_mouse.y) * 20
+            
+        # Si es por teclado y no hay eje bloqueado, mover libremente en plano XY (Ursina)
+        # Pero el usuario pidió bloquear ejes.
+            
+        eff_axis = self.lock_axis if self.active_axis == 'keyboard' else self.active_axis
+            
+        if self.mode == 'translate':
+            new_pos = list(self.original_transform['pos'])
+            val = dy if eff_axis in ('y', 'z') else dx
+            idx = 0 if eff_axis == 'x' else (2 if eff_axis == 'y' else 1)
                 
-            destroy(obj)
+            if eff_axis:
+                new_pos[idx] += val
+            else: # Libre
+                new_pos[0] += dx
+                new_pos[2] += dy
+            self.target.position = tuple(new_pos)
+                
+        elif self.mode == 'rotate':
+            new_rot = list(self.original_transform['rot'])
+            val = (dx + dy) * 50
+            if eff_axis == 'x': new_rot[0] += val
+            elif eff_axis == 'y': new_rot[2] += val
+            elif eff_axis == 'z': new_rot[1] += val
+            else: # Libre (YAW por defecto)
+                new_rot[1] += val
+            self.target.rotation = tuple(new_rot)
+                
+        elif self.mode == 'scale':
+            new_scale = list(self.original_transform['scale'])
+            fac = 1.0 + (dx + dy) * 0.5
+            if eff_axis == 'x': new_scale[0] *= fac
+            elif eff_axis == 'y': new_scale[2] *= fac
+            elif eff_axis == 'z': new_scale[1] *= fac
+            else: # Uniforme
+                new_scale = [v * fac for v in new_scale]
+            self.target.scale = tuple(new_scale)
+
+    def confirm_op(self):
+        self.active_axis = None
+        self.mode = None
+        self.lock_axis = None
+        print("Transformación confirmada")
+
+    def cancel_op(self):
+        if self.original_transform:
+            self.target.position = self.original_transform['pos']
+            self.target.rotation = self.original_transform['rot']
+            self.target.scale = self.original_transform['scale']
+        self.active_axis = None
+        self.mode = None
+        self.lock_axis = None
+        print("Transformación cancelada")
+
+    def refresh_visual_colors(self):
+        if not self.mode: return
+        
+        base_colors = {'x': color.red, 'y': color.green, 'z': color.blue}
+        
+        for axis_name, entities in self.axis_entities[self.mode].items():
+            for e in entities:
+                if self.lock_axis:
+                    if axis_name == self.lock_axis:
+                        e.color = color.white 
+                        e.alpha = 1.0
+                    else:
+                        e.color = base_colors[axis_name]
+                        e.alpha = 0.1 # Atenuar otros ejes
+                else:
+                    e.color = base_colors[axis_name]
+                    e.alpha = 1.0
+
+    def delete_target(self):
+        if not self.target: return
+        
+        target_to_del = self.target
+        self.detach() # Desasociar primero para limpiar colores/referencias
+        
+        import simulation
+        # Buscar en la lista de la simulación para eliminarlo
+        for scene_entity in scene.entities:
+            if hasattr(scene_entity, 'spawned_objects') and isinstance(scene_entity, simulation.RobotArmSim):
+                if target_to_del in scene_entity.spawned_objects:
+                    scene_entity.spawn_objects_cleanup = True # Flag opcional para robot_sim
+                    scene_entity.spawned_objects.remove(target_to_del)
+                    break
+        
+        destroy(target_to_del)
+        print("Objeto eliminado con éxito")
