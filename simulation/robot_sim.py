@@ -9,6 +9,8 @@ from direct.actor.Actor import Actor
 import gltf
 
 from .entities import CircularJointSlider, TransformationGizmo
+from .collision_manager import CollisionManager
+from .collision_aware_interpolator import CollisionAwareInterpolator
 
 # Constants
 DEFAULT_CAM_POS = (2.3, 3.54, -7.09)
@@ -159,10 +161,15 @@ class RobotArmSim:
                 
                 self.joint_sliders.append(slider)
 
+        # ── Collision System ──
+        self.collision_mgr = CollisionManager(self, safety_margin=5.0)
+        self.collision_interpolator = CollisionAwareInterpolator(self)
+
         scene.sim_instance = self
 
-    def _apply_angle(self, joint_index, angle_deg):
-        """Aplica un ángulo (grados) a la junta dada por índice."""
+    def _apply_angle_raw(self, joint_index, angle_deg):
+        """Apply angle WITHOUT collision check.  Used internally by
+        the collision system for tentative testing."""
         clamped = max(-90, min(90, angle_deg))
         self.angles[joint_index] = clamped
         jname = self.JOINT_NAMES[joint_index]
@@ -176,6 +183,32 @@ class RobotArmSim:
                 ctrl.setHpr(rest[0], rest[1] + clamped, rest[2])
             elif axis == "ROLL":
                 ctrl.setHpr(rest[0], rest[1], rest[2] + clamped)
+
+    def _apply_angle(self, joint_index, angle_deg, force=False):
+        """Apply angle with smart collision check.  Returns True if accepted.
+
+        Uses 'would_worsen' logic: if the arm is already near/in collision
+        with the floor, movements that RAISE the arm (improve the situation)
+        are still allowed.  Only movements that push the arm LOWER are blocked.
+        This prevents the 'total lockout' bug where the arm gets stuck.
+        """
+        if force or not hasattr(self, 'collision_mgr'):
+            self._apply_angle_raw(joint_index, angle_deg)
+            return True
+
+        # Snapshot the lowest probe Y BEFORE the change
+        old_min_y = self.collision_mgr.get_min_probe_y()
+        old_angle = self.angles[joint_index]
+
+        # Apply tentatively
+        self._apply_angle_raw(joint_index, angle_deg)
+
+        # Check if this made things worse
+        if self.collision_mgr.would_worsen(old_min_y):
+            # Revert
+            self._apply_angle_raw(joint_index, old_angle)
+            return False
+        return True
 
     def _get_angle(self, joint_index):
         """Devuelve el ángulo actual de la junta dada por índice."""
@@ -285,6 +318,30 @@ class RobotArmSim:
                     # Aplicar ángulos recibidos a las rotaciones (sobrescribe la entrada del ratón)
                     for i in range(min(len(incoming), self.NUM_JOINTS)):
                         self._apply_angle(i, incoming[i])
+                    
+                    # Forzar sincronización de vuelta con la GUI. 
+                    # Si la colisión bloqueó y revirtió algún ángulo, esto hará que
+                    # el slider de Qt regrese instantáneamente a la posición permitida.
+                    self.sync_to_gui()
+                    
+                    # Send collision status back to GUI
+                    self._send_collision_status()
+                elif msg.get("type") == "plan_path":
+                    # GUI asks us to plan a collision-safe path
+                    start = msg.get("start", list(self.angles))
+                    end = msg.get("end", list(self.angles))
+                    duration = msg.get("duration", 1.0)
+                    waypoints, evasion_needed = self.collision_interpolator.plan_safe_path(start, end)
+                    reply = json.dumps({
+                        "type": "path_result",
+                        "waypoints": waypoints,
+                        "duration": duration,
+                        "evasion": evasion_needed
+                    })
+                    try:
+                        self.feedback_sock.sendto(reply.encode(), GUI_ADDR)
+                    except Exception:
+                        pass
                 elif msg.get("type") == "spawn":
                     # En lugar de spawnear de inmediato, entramos en modo "espera de click"
                     self.pending_spawn_data = {
@@ -385,6 +442,9 @@ class RobotArmSim:
         if time.time() - self.last_save_time > 5:
             self.save_camera_config()
             self.last_save_time = time.time()
+
+        # ── Update collision debug visuals ──
+        self.collision_mgr.update_debug_visuals()
             
         # --- Aplicar Fuerzas Físicas (Gravedad y Colisiones) ---
         for obj in list(self.spawned_objects):
@@ -403,3 +463,17 @@ class RobotArmSim:
                 floor_y = obj.scale_y / 2
                 if obj.y < floor_y:
                     obj.y = floor_y
+
+    def _send_collision_status(self):
+        """Send current collision state to the GUI."""
+        colliding = self.collision_mgr.is_colliding()
+        probes = self.collision_mgr.get_colliding_probes() if colliding else []
+        msg = json.dumps({
+            "type": "collision_status",
+            "colliding": colliding,
+            "joints": probes
+        })
+        try:
+            self.feedback_sock.sendto(msg.encode(), GUI_ADDR)
+        except Exception:
+            pass

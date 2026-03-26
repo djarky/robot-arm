@@ -78,6 +78,15 @@ class LayoutMixin:
             s.valueChanged.connect(self.send_angles)
             joint_layout.addRow(f"{joint_labels[i]}:", s)
             self.sliders.append(s)
+
+        # Collision indicator LED
+        self.collision_indicator = QLabel("● OK")
+        self.collision_indicator.setStyleSheet(
+            "color: #4CAF50; font-size: 14px; font-weight: bold;"
+        )
+        self.collision_indicator.setToolTip("Sin colisión")
+        joint_layout.addRow("Colisión:", self.collision_indicator)
+
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
 
