@@ -48,12 +48,11 @@ def update():
     sim.update()
 
 def input(key):
+    # El TransformationGizmo ya maneja G, R, S, X y ESC internamente.
+    # Mantenemos 'delete' como alternativa global.
     if key == 'delete':
         if sim.gizmo.enabled and sim.gizmo.target:
             sim.gizmo.delete_target()
-    elif key == 'escape':
-        if sim.gizmo.enabled:
-            sim.gizmo.detach()
 
 # Bucle principal de Ursina
 if __name__ == '__main__':

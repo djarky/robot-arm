@@ -1,2 +1,2 @@
-from .entities import CircularJointSlider, TranslationGizmo
+from .entities import CircularJointSlider, TransformationGizmo
 from .robot_sim import RobotArmSim
