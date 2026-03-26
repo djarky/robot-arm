@@ -45,6 +45,12 @@ class LayoutMixin:
         self.btn_toggle_cam = QPushButton("Activar Seguimiento")
         self.btn_toggle_cam.clicked.connect(self.toggle_camera)
 
+        self.btn_handedness = QPushButton("Modo: Diestro (Derecha)")
+        self.btn_handedness.setStyleSheet(
+            "background-color: #0d47a1; color: white; border-radius: 3px; padding: 2px;"
+        )
+        self.btn_handedness.clicked.connect(self.toggle_handedness)
+
         self.cam_status_label = QLabel("SISTEMA: DESACTIVADO")
         self.cam_status_label.setAlignment(Qt.AlignCenter)
         self.cam_status_label.setStyleSheet(
@@ -53,6 +59,7 @@ class LayoutMixin:
 
         layout.addWidget(self.cam_label)
         layout.addWidget(self.cam_status_label)
+        layout.addWidget(self.btn_handedness)
         layout.addWidget(self.btn_toggle_cam)
         group.setLayout(layout)
         self.right_layout.addWidget(group)
