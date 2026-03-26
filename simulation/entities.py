@@ -288,6 +288,7 @@ class TransformationGizmo(Entity):
         if self.mode and self.active_axis == 'keyboard':
             self.refresh_visual_colors()
             
+        # Sensibilidad base para rotar/escalar
         dx = (mouse.x - self.drag_start_mouse.x) * 20
         dy = (mouse.y - self.drag_start_mouse.y) * 20
             
@@ -298,12 +299,22 @@ class TransformationGizmo(Entity):
             
         if self.mode == 'translate':
             new_pos = list(self.original_transform['pos'])
-            val = dy if eff_axis in ('y', 'z') else dx
-            idx = 0 if eff_axis == 'x' else (2 if eff_axis == 'y' else 1)
-                
-            if eff_axis:
-                new_pos[idx] += val
-            else: # Libre
+            
+            # Sensibilidad dinámica: XY=80, Z=120
+            s_xyz = 80
+            s_z = 120
+            
+            dx = (mouse.x - self.drag_start_mouse.x) * s_xyz
+            dy = (mouse.y - self.drag_start_mouse.y) * s_xyz
+            dz = (mouse.y - self.drag_start_mouse.y) * s_z # Z usa movimientos verticales
+            
+            if eff_axis == 'x':
+                new_pos[0] += dx
+            elif eff_axis == 'y': # Y en Z-up
+                new_pos[2] += dy
+            elif eff_axis == 'z': # Z en Z-up (Ursina Y)
+                new_pos[1] += dz
+            else: # Libre (XY)
                 new_pos[0] += dx
                 new_pos[2] += dy
             self.target.position = tuple(new_pos)
