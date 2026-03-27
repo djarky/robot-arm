@@ -56,6 +56,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
         # Process / serial handles
         self.ser = None
         self.sim_proc = None
+        self._waiting_for_path = False
 
         # === Left panel: 3-D Simulation ===
         self.sim_panel = QGroupBox("3D Simulation View")

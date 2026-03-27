@@ -101,6 +101,15 @@ class CommunicationMixin:
                 data, _ = self.recv_sock.recvfrom(4096)
                 msg = json.loads(data.decode())
                 if msg.get("type") == "sync_angles":
+                    # --- CRITICAL FIX: Flicker Prevention ---
+                    # Ignore simulation feedback if we are in the middle of a local 
+                    # animation interpolation or waiting for a path request to complete.
+                    # This prevents the simulation from "pulling back" sliders due to 
+                    # delayed UDP messages.
+                    is_animating = hasattr(self, 'interp_timer') and self.interp_timer.isActive()
+                    if is_animating or getattr(self, '_waiting_for_path', False):
+                        continue
+
                     angles = msg["data"]
                     for i, angle in enumerate(angles):
                         if i < len(self.sliders):
@@ -304,6 +313,8 @@ class CommunicationMixin:
         This method converts the waypoints into the existing
         interpolation machinery used by AnimationManagerMixin.
         """
+        self._waiting_for_path = False # Clear the wait state
+
         if not waypoints:
             return
 
