@@ -162,7 +162,7 @@ class RobotArmSim:
                 self.joint_sliders.append(slider)
 
         # ── Collision System ──
-        self.collision_mgr = CollisionManager(self, safety_margin=5.0)
+        self.collision_mgr = CollisionManager(self, safety_margin=12.5)
         self.collision_interpolator = CollisionAwareInterpolator(self)
 
         scene.sim_instance = self

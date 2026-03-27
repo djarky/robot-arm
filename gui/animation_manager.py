@@ -422,6 +422,8 @@ class AnimationManagerMixin:
         # to check whether the direct path collides with the floor.
         # The sim will reply with a path_result message handled by
         # CommunicationMixin.sync_from_sim → _execute_safe_path.
+        self._waiting_for_path = True  # Block simulation feedback until path is ready
+        
         import json
         current = [float(s.value()) for s in self.sliders]
         msg = json.dumps({
@@ -435,10 +437,12 @@ class AnimationManagerMixin:
         except Exception as e:
             print(f"[Collision] Failed to send plan_path: {e}")
             # Fallback: play directly without collision check
+            self._waiting_for_path = False
             self._start_direct_interpolation(duration)
 
     def _start_direct_interpolation(self, duration):
         """Start interpolation directly (no collision check), used as fallback."""
+        self._waiting_for_path = False # Clear wait state
         fps = 30
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0

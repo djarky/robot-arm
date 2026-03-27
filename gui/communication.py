@@ -313,6 +313,8 @@ class CommunicationMixin:
         This method converts the waypoints into the existing
         interpolation machinery used by AnimationManagerMixin.
         """
+        self._waiting_for_path = False # Clear the wait state
+
         if not waypoints:
             return
 

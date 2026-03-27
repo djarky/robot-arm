@@ -46,7 +46,7 @@ class CollisionManager:
         at rest), so this margin should be generous.  Default 5.0.
     """
 
-    def __init__(self, sim, safety_margin=5.0):
+    def __init__(self, sim, safety_margin=12.5):
         self.sim = sim
         self.safety_margin = safety_margin
 
@@ -202,6 +202,14 @@ class CollisionManager:
         colliding = self.is_colliding()
         for i, a in enumerate(saved):
             self.sim._apply_angle_raw(i, a)
+        
+        # Ensure the skeleton is back to reality before leaving
+        if self.sim and hasattr(self.sim, 'actor'):
+            try:
+                self.sim.actor.getPartBundle('modelRoot').forceUpdate()
+            except Exception:
+                pass
+
         return colliding
 
     # ------------------------------------------------------------------
