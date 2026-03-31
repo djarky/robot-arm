@@ -21,7 +21,7 @@ class AnimationManagerMixin:
     """Mixin that adds visual timeline and animation playback to the main window.
 
     Expects the host class to provide:
-        self.saved_poses            (dict)          — {name: [a, b, c]}
+        self.saved_poses            (dict)          — {name: [a, b, c, d, e]}
         self.saved_animations       (dict)          — {name: [{pose, duration}, ...]}
         self.animations_file        (str)           — path to animations.json
         self.pose_icons_dir         (str)           — directory for thumbnails
@@ -417,23 +417,55 @@ class AnimationManagerMixin:
 
         duration = max(duration, 0.05)  # Minimum 50 ms to avoid div-by-zero
 
+        # ── Request collision-safe path from the simulation ──
+        # Instead of starting interpolation directly, we ask the sim
+        # to check whether the direct path collides with the floor.
+        # The sim will reply with a path_result message handled by
+        # CommunicationMixin.sync_from_sim → _execute_safe_path.
+        self._waiting_for_path = True  # Block simulation feedback until path is ready
+        
+        import json
+        current = [float(s.value()) for s in self.sliders]
+        msg = json.dumps({
+            "type": "plan_path",
+            "start": current,
+            "end": list(self.target_angles),
+            "duration": duration
+        })
+        try:
+            self.sock.sendto(msg.encode(), self.target_addr)
+        except Exception as e:
+            print(f"[Collision] Failed to send plan_path: {e}")
+            # Fallback: play directly without collision check
+            self._waiting_for_path = False
+            self._start_direct_interpolation(duration)
+
+    def _start_direct_interpolation(self, duration):
+        """Start interpolation directly (no collision check), used as fallback."""
+        self._waiting_for_path = False # Clear wait state
         fps = 30
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
 
         self.current_angles_f = [float(s.value()) for s in self.sliders]
+
+        # Pad target angles if necessary
+        while len(self.target_angles) < len(self.sliders):
+            self.target_angles.append(0)
+
         self.interp_deltas = [
             (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
-            for i in range(3)
+            for i in range(len(self.sliders))
         ]
 
+        self._safe_path_active = False
         self.interp_timer.start(int(1000 / fps))
 
     def update_interpolation(self):
         """Called by interp_timer on each tick to advance the current interpolation step."""
         self.interp_count += 1
         if self.interp_count <= self.interp_steps:
-            for i in range(3):
+            for i in range(len(self.sliders)):
                 self.current_angles_f[i] += self.interp_deltas[i]
                 self.sliders[i].blockSignals(True)
                 self.sliders[i].setValue(int(round(self.current_angles_f[i])))
@@ -442,11 +474,17 @@ class AnimationManagerMixin:
         else:
             self.interp_timer.stop()
             # Snap to exact target values (eliminate float accumulation error)
-            for i in range(3):
-                self.sliders[i].blockSignals(True)
-                self.sliders[i].setValue(self.target_angles[i])
-                self.sliders[i].blockSignals(False)
+            for i in range(len(self.sliders)):
+                if i < len(self.target_angles):
+                    self.sliders[i].blockSignals(True)
+                    self.sliders[i].setValue(self.target_angles[i])
+                    self.sliders[i].blockSignals(False)
             self.send_angles()
 
-            self.current_seq_index += self.playback_direction
-            self.start_next_in_sequence()
+            # Check if we're playing a safe (evasion) path
+            if getattr(self, '_safe_path_active', False):
+                # Chain to the next waypoint in the safe path
+                self._play_next_safe_waypoint()
+            else:
+                self.current_seq_index += self.playback_direction
+                self.start_next_in_sequence()

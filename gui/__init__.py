@@ -1,17 +1,7 @@
-"""
-gui package — Robot Arm Control System UI modules.
-"""
-from gui.widgets import PoseWidget, TimeConnectorWidget
-from gui.camera_thread import CameraThread
-from gui.pose_manager import PoseManagerMixin
-from gui.animation_manager import AnimationManagerMixin
-from gui.communication import CommunicationMixin
-
-__all__ = [
-    "PoseWidget",
-    "TimeConnectorWidget",
-    "CameraThread",
-    "PoseManagerMixin",
-    "AnimationManagerMixin",
-    "CommunicationMixin",
-]
+from .widgets import PoseWidget, TimeConnectorWidget
+from .camera_thread import CameraThread
+from .pose_manager import PoseManagerMixin
+from .animation_manager import AnimationManagerMixin
+from .communication import CommunicationMixin
+from .layout_manager import LayoutMixin
+from .camera_processor import CameraProcessorMixin

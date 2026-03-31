@@ -10,7 +10,9 @@ import json
 import serial
 import serial.tools.list_ports
 import sys
+import os
 import time
+import subprocess
 from PySide6.QtCore import QTimer
 
 
@@ -44,8 +46,9 @@ class CommunicationMixin:
         self.sock.sendto(msg.encode(), self.target_addr)
 
         if self.ser and self.ser.is_open:
-            # Format: "ANG1,ANG2,ANG3,GRIPPER\n" (offset by +90 to map -90..90 → 0..180)
-            serial_msg = f"{angles[0] + 90},{angles[1] + 90},{angles[2] + 90},0\n"
+            # Format: "ANG0,ANG1,ANG2,ANG3,ANG4,GRIPPER\n" (offset by +90 to map -90..90 → 0..180)
+            parts = [str(a + 90) for a in angles]
+            serial_msg = ",".join(parts) + ",0\n"
             self.ser.write(serial_msg.encode())
 
     def send_camera_angles(self, angles: list):
@@ -68,6 +71,25 @@ class CommunicationMixin:
         msg = json.dumps({"type": "reset_camera"})
         self.sock.sendto(msg.encode(), self.target_addr)
 
+    def launch_simulation(self):
+        """Launch the Ursina 3-D simulation embedded in sim_container."""
+        win_id = str(int(self.sim_container.winId()))
+        width = str(self.sim_container.width())
+        height = str(self.sim_container.height())
+        if getattr(sys, 'frozen', False):
+            sim_executable = os.path.join(os.path.dirname(sys.executable), 'sim_3d')
+            if sys.platform == 'win32':
+                sim_executable += '.exe'
+            self.sim_proc = subprocess.Popen(
+                [sim_executable, win_id, width, height]
+            )
+        else:
+            self.sim_proc = subprocess.Popen(
+                [sys.executable, "sim_3d.py", win_id, width, height]
+            )
+        self.btn_launch_sim.setEnabled(False)
+        self.btn_launch_sim.setText("Simulación Iniciada")
+
     # ------------------------------------------------------------------
     # UDP feedback from simulation
     # ------------------------------------------------------------------
@@ -76,15 +98,34 @@ class CommunicationMixin:
         """Poll the receive socket and sync slider values from simulation feedback."""
         try:
             while True:
-                data, _ = self.recv_sock.recvfrom(1024)
+                data, _ = self.recv_sock.recvfrom(4096)
                 msg = json.loads(data.decode())
                 if msg.get("type") == "sync_angles":
+                    # --- CRITICAL FIX: Flicker Prevention ---
+                    # Ignore simulation feedback if we are in the middle of a local 
+                    # animation interpolation or waiting for a path request to complete.
+                    # This prevents the simulation from "pulling back" sliders due to 
+                    # delayed UDP messages.
+                    is_animating = hasattr(self, 'interp_timer') and self.interp_timer.isActive()
+                    if is_animating or getattr(self, '_waiting_for_path', False):
+                        continue
+
                     angles = msg["data"]
                     for i, angle in enumerate(angles):
                         if i < len(self.sliders):
                             self.sliders[i].blockSignals(True)
                             self.sliders[i].setValue(int(angle))
                             self.sliders[i].blockSignals(False)
+                elif msg.get("type") == "path_result":
+                    # Sim has computed a collision-safe path
+                    waypoints = msg.get("waypoints", [])
+                    duration = msg.get("duration", 1.0)
+                    evasion = msg.get("evasion", False)
+                    if evasion:
+                        print(f"[Collision] Evasion path with {len(waypoints)} waypoints")
+                    self._execute_safe_path(waypoints, duration, evasion)
+                elif msg.get("type") == "collision_status":
+                    self._update_collision_indicator(msg)
         except BlockingIOError:
             pass
         except Exception as e:
@@ -225,7 +266,10 @@ class CommunicationMixin:
                 with open("config.json", "r") as f:
                     config = json.load(f)
 
-                angles = config.get("joint_angles", [0, 0, 0])
+                angles = config.get("joint_angles", [0, 0, 0, 0, 0, 0])
+                # Padding para configs antiguas con menos de 5 ángulos
+                while len(angles) < len(self.sliders):
+                    angles.append(0)
                 for i, angle in enumerate(angles):
                     if i < len(self.sliders):
                         self.sliders[i].setValue(angle)
@@ -254,3 +298,99 @@ class CommunicationMixin:
                 json.dump(config, f, indent=4)
         except Exception as e:
             print(f"Error saving config: {e}")
+
+    # ------------------------------------------------------------------
+    # Collision-aware path execution
+    # ------------------------------------------------------------------
+
+    def _execute_safe_path(self, waypoints, original_duration, evasion_needed):
+        """Execute waypoints returned by the sim's collision interpolator.
+
+        If evasion was needed, the waypoints list has 3 entries
+        (lift, transit, lower) and we split the original duration
+        across them (half-speed per sub-phase).
+
+        This method converts the waypoints into the existing
+        interpolation machinery used by AnimationManagerMixin.
+        """
+        self._waiting_for_path = False # Clear the wait state
+
+        if not waypoints:
+            return
+
+        if evasion_needed and len(waypoints) > 1:
+            # Distribute time: each sub-phase gets duration / num_waypoints
+            sub_duration = original_duration / len(waypoints)
+            # Build an expanded sequence and play it
+            self._pending_safe_waypoints = []
+            for wp in waypoints:
+                self._pending_safe_waypoints.append({
+                    "angles": wp,
+                    "duration": sub_duration
+                })
+        else:
+            self._pending_safe_waypoints = [{
+                "angles": waypoints[0],
+                "duration": original_duration
+            }]
+
+        # Start playing the first waypoint
+        self._safe_wp_index = 0
+        self._play_next_safe_waypoint()
+
+    def _play_next_safe_waypoint(self):
+        """Play one waypoint from the safe path, then advance."""
+        if not hasattr(self, '_pending_safe_waypoints'):
+            return
+        if self._safe_wp_index >= len(self._pending_safe_waypoints):
+            # Done with safe path — continue the main animation sequence
+            del self._pending_safe_waypoints
+            del self._safe_wp_index
+            # Advance the main sequence
+            if hasattr(self, 'current_seq_index') and hasattr(self, 'playback_direction'):
+                self.current_seq_index += self.playback_direction
+                self.start_next_in_sequence()
+            return
+
+        wp = self._pending_safe_waypoints[self._safe_wp_index]
+        self.target_angles = wp["angles"]
+        duration = max(wp["duration"], 0.05)
+
+        fps = 30
+        self.interp_steps = max(1, int(duration * fps))
+        self.interp_count = 0
+
+        self.current_angles_f = [float(s.value()) for s in self.sliders]
+
+        # Pad target if necessary
+        while len(self.target_angles) < len(self.sliders):
+            self.target_angles.append(0)
+
+        self.interp_deltas = [
+            (self.target_angles[i] - self.current_angles_f[i]) / self.interp_steps
+            for i in range(len(self.sliders))
+        ]
+
+        # Override the completion callback so it chains to the next waypoint
+        self._safe_path_active = True
+        self._safe_wp_index += 1
+        self.interp_timer.start(int(1000 / fps))
+
+    def _update_collision_indicator(self, msg):
+        """Update the collision LED indicator in the GUI."""
+        if not hasattr(self, 'collision_indicator'):
+            return
+        colliding = msg.get("colliding", False)
+        joints = msg.get("joints", [])
+        if colliding:
+            self.collision_indicator.setText("● COLISIÓN")
+            self.collision_indicator.setStyleSheet(
+                "color: #f44336; font-size: 14px; font-weight: bold;"
+            )
+            self.collision_indicator.setToolTip(f"Probes: {', '.join(joints)}")
+        else:
+            self.collision_indicator.setText("● OK")
+            self.collision_indicator.setStyleSheet(
+                "color: #4CAF50; font-size: 14px; font-weight: bold;"
+            )
+            self.collision_indicator.setToolTip("Sin colisión")
