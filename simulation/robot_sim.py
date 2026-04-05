@@ -417,7 +417,6 @@ class RobotArmSim:
                 position=spawn_pos, collider='box',
                 mass=mass, friction=0.7
             )
-            obj.entity.collider = 'box'
 
         elif shape == "sphere":
             # BulletSphereShape IS the exact shape of a sphere — rolls naturally
@@ -426,7 +425,6 @@ class RobotArmSim:
                 position=spawn_pos, collider='sphere',
                 mass=mass, friction=0.5
             )
-            obj.entity.collider = 'sphere'
         elif shape == "cylinder":
             # ConvexHullShape from the real cylinder vertices — rolls naturally
             cyl_model = Cylinder(resolution=16)
@@ -440,7 +438,6 @@ class RobotArmSim:
             except Exception as e:
                 print(f"[Spawn] Cylinder hull fallback: {e}")
                 obj.collider = 'box'
-            obj.entity.collider = 'box' # Ursina picking
         elif shape == "torus":
             # CompoundShape of N segmented ConvexHulls — hole is traversable
             torus_path = [Vec3(math.cos(math.radians(i * (360 / 30))), 0,
@@ -469,14 +466,14 @@ class RobotArmSim:
                     color=color.random_color(), position=spawn_pos,
                     collider='sphere', mass=mass, friction=0.5
                 )
-            
-            obj.entity.collider = 'box'
 
         if obj:
             obj.is_spawned_toy = True
             if hasattr(obj, 'entity'):
-                obj.entity.is_spawned_toy = True
-                obj.entity.parent_physics = obj
+                # Proxy invisible estricto que Ursina siempre detectará en sus raycasts normales
+                picker = Entity(parent=obj.entity, model='cube', scale=1, collider='box', color=color.clear)
+                picker.is_spawned_toy = True
+                picker.parent_physics = obj
             self.spawned_objects.append(obj)
 
     def update(self):
