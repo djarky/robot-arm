@@ -4,13 +4,76 @@ import json
 import math
 import time
 from ursina import *
-from panda3d.core import NodePath, Filename
+from panda3d.core import NodePath, Filename, TransformState, LPoint3f, GeomVertexReader
 from direct.actor.Actor import Actor
+from panda3d.bullet import (BulletConvexHullShape, BulletTriangleMesh,
+                             BulletTriangleMeshShape, BulletRigidBodyNode)
 import gltf
 
+from ursina.physics import PhysicsEntity, physics_handler
 from .entities import CircularJointSlider, TransformationGizmo
 from .collision_manager import CollisionManager
 from .collision_aware_interpolator import CollisionAwareInterpolator
+
+
+# ── Bullet Collider Helpers ──────────────────────────────────────────
+
+def ConvexHullCollider(entity_model):
+    """Genera BulletConvexHullShape a partir de los vértices reales del mesh.
+    Se ajusta fielmente a la geometría — no es un AABB ni una caja."""
+    shape = BulletConvexHullShape()
+    geom_nodes = entity_model.findAllMatches('**/+GeomNode')
+    for geom_np in geom_nodes:
+        geom_node = geom_np.node()
+        for i in range(geom_node.getNumGeoms()):
+            shape.addGeom(geom_node.getGeom(i))
+    return shape
+
+
+def TorusCompoundCollider(entity_model, num_segments=8):
+    """Genera N ConvexHulls segmentados para preservar el agujero del torus.
+    Los objetos pueden pasar por el centro de la dona.
+    Retorna lista de BulletConvexHullShape para addShape al RigidBodyNode."""
+    shapes = []
+    geom_nodes = entity_model.findAllMatches('**/+GeomNode')
+    if geom_nodes.getNumPaths() == 0:
+        return shapes
+
+    # Collect ALL vertices from all geoms
+    vertices = []
+    for gn_np in geom_nodes:
+        geom_node = gn_np.node()
+        for gi in range(geom_node.getNumGeoms()):
+            geom = geom_node.getGeom(gi)
+            vdata = geom.getVertexData()
+            reader = GeomVertexReader(vdata, 'vertex')
+            while not reader.isAtEnd():
+                v = reader.getData3f()
+                vertices.append((v.x, v.y, v.z))
+
+    if len(vertices) < 4:
+        return shapes
+
+    # Divide vertices into angular segments (by angle in the XZ plane)
+    segment_verts = [[] for _ in range(num_segments)]
+    for vx, vy, vz in vertices:
+        angle = math.atan2(vz, vx)  # -pi to pi
+        angle_norm = (angle + math.pi) / (2 * math.pi)  # 0 to 1
+        seg_idx = int(angle_norm * num_segments) % num_segments
+        # Add to this segment AND the next for overlap/continuity
+        segment_verts[seg_idx].append(LPoint3f(vx, vy, vz))
+        next_idx = (seg_idx + 1) % num_segments
+        segment_verts[next_idx].append(LPoint3f(vx, vy, vz))
+
+    for seg in segment_verts:
+        if len(seg) < 4:
+            continue
+        hull = BulletConvexHullShape()
+        for pt in seg:
+            hull.addPoint(pt)
+        shapes.append(hull)
+
+    return shapes
 
 # Constants
 DEFAULT_CAM_POS = (2.3, 3.54, -7.09)
@@ -26,10 +89,20 @@ class RobotArmSim:
         # Socket para enviar datos de vuelta a la GUI
         self.feedback_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         
+        # ── Configurar Motor de Físicas Bullet ──
+        physics_handler.gravity = 50  # Escala del modelo ~100 unidades
+
         # Escenario básico
         self.sky = Sky()
-        self.floor = Entity(model='plane', scale=500, texture='white_cube', 
-                          texture_scale=(50,50), color=color.gray, collider='box')
+        self.floor = Entity(
+            model='cube', scale=(500, 1, 500), origin_y=0.5,
+            texture='white_cube', texture_scale=(50, 50),
+            color=color.gray, collider='box'
+        )
+        self.floor_physics = PhysicsEntity(
+            model='cube', scale=(500, 1, 500), origin_y=0.5,
+            mass=0, collider='box', visible=False
+        )
 
         # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
         # Ajustado para Z-up: Verde(Y) es Horizontal adelante, Azul(Z) es Vertical arriba
@@ -165,6 +238,10 @@ class RobotArmSim:
         self.collision_mgr = CollisionManager(self, safety_margin=12.5)
         self.collision_interpolator = CollisionAwareInterpolator(self)
 
+        # ── Gripper Physics Colliders (pinza1, pinza2, etc.) ──
+        self.gripper_physics = []
+        self._setup_gripper_colliders()
+
         scene.sim_instance = self
 
     def _apply_angle_raw(self, joint_index, angle_deg):
@@ -268,33 +345,138 @@ class RobotArmSim:
         except Exception as e:
             print(f"Error guardando config de cámara: {e}")
 
-    def spawn_object(self, shape, size, mass, position=None):
-        # Spawnea objetos en la posición indicada o una por defecto
-        obj = None
-        spawn_pos = position if position else (2.5, 3, 0)
-        
-        # Construir geometría según la forma enviada
-        if shape == "cube":
-            obj = Entity(model='cube', scale=size, color=color.random_color(), position=spawn_pos, collider='box')
-        elif shape == "cylinder":
-            obj = Entity(model=Cylinder(resolution=16), scale=size, color=color.random_color(), position=spawn_pos, collider='mesh')
-        elif shape == "sphere":
-            obj = Entity(model='sphere', scale=size, color=color.random_color(), position=spawn_pos, collider='sphere')
-        elif shape == "torus":
-            # Usar un Pipe circular (parecido al CircularSlider) ya que Ursina no tiene 'torus'
-            torus_path = [Vec3(math.cos(math.radians(i*(360/30))), 0, math.sin(math.radians(i*(360/30)))) for i in range(31)]
-            cross_section = [Vec3(math.cos(math.radians(i*(360/8)))*0.2, math.sin(math.radians(i*(360/8)))*0.2, 0) for i in range(9)]
+    def _setup_gripper_colliders(self):
+        """Configura colliders BulletTriangleMeshShape para las pinzas del robot.
+        Usa la geometría exacta (cada triángulo) del mesh real del modelo GLB.
+        Son kinematic: el usuario las mueve via joints, Bullet las usa para
+        empujar objetos spawneados."""
+        gripper_parts = [
+            'pinza1', 'pinza2', 'base-de-la-garra', 'tapa-garra',
+            'engranaje1', 'engranaje2', 'barra1', 'barra2'
+        ]
+
+        for part_name in gripper_parts:
             try:
-                obj = Entity(model=Pipe(path=torus_path, base_shape=cross_section, cap_ends=False), scale=size, color=color.random_color(), position=spawn_pos, collider='mesh')
-                obj.model.generate_normals()
-                obj.model.smooth = True
-            except Exception:
-                obj = Entity(model='sphere', scale=(size, size*0.5, size), color=color.random_color(), position=spawn_pos, collider='box')
-                
+                results = self.actor.findAllMatches(f'**/{part_name}')
+                if results.getNumPaths() == 0:
+                    print(f"[Gripper] Parte '{part_name}' no encontrada")
+                    continue
+
+                part_np = results.getPath(0)
+
+                # Find GeomNodes — either the node itself or its children
+                geom_nps = part_np.findAllMatches('**/+GeomNode')
+                if geom_nps.getNumPaths() == 0:
+                    # The node itself may be a GeomNode
+                    if part_np.node().getType().getName() == 'GeomNode':
+                        geom_nps = [part_np]
+                    else:
+                        print(f"[Gripper] '{part_name}' sin GeomNodes")
+                        continue
+
+                # Build BulletTriangleMesh from exact geometry
+                bullet_mesh = BulletTriangleMesh()
+                found_geoms = False
+                for gn_np in geom_nps:
+                    gn = gn_np.node() if hasattr(gn_np, 'node') else gn_np
+                    for gi in range(gn.getNumGeoms()):
+                        bullet_mesh.addGeom(gn.getGeom(gi))
+                        found_geoms = True
+
+                if not found_geoms:
+                    print(f"[Gripper] '{part_name}' sin geometría")
+                    continue
+
+                mesh_shape = BulletTriangleMeshShape(bullet_mesh, dynamic=False)
+
+                # Create kinematic RigidBodyNode
+                rb_node = BulletRigidBodyNode(f'gripper_{part_name}')
+                rb_node.addShape(mesh_shape)
+                rb_node.setMass(0)
+                rb_node.setKinematic(True)
+
+                # Parent to the actor part so it follows skeleton animation
+                rb_np = part_np.attachNewNode(rb_node)
+                physics_handler.world.attachRigidBody(rb_node)
+
+                self.gripper_physics.append(rb_np)
+                print(f"[Gripper] ✓ Collider mesh exacto para '{part_name}'")
+            except Exception as e:
+                print(f"[Gripper] Error configurando '{part_name}': {e}")
+
+    def spawn_object(self, shape, size, mass, position=None):
+        """Spawnea objetos con físicas Bullet reales.
+        Cada objeto usa el collider que corresponde EXACTAMENTE a su geometría."""
+        spawn_pos = position if position else (2.5, 3, 0)
+        obj = None
+
+        if shape == "cube":
+            # BulletBoxShape IS the exact shape of a cube
+            obj = PhysicsEntity(
+                model='cube', scale=size, color=color.random_color(),
+                position=spawn_pos, collider='box',
+                mass=mass, friction=0.7
+            )
+            obj.entity.collider = 'box'
+
+        elif shape == "sphere":
+            # BulletSphereShape IS the exact shape of a sphere — rolls naturally
+            obj = PhysicsEntity(
+                model='sphere', scale=size, color=color.random_color(),
+                position=spawn_pos, collider='sphere',
+                mass=mass, friction=0.5
+            )
+            obj.entity.collider = 'sphere'
+        elif shape == "cylinder":
+            # ConvexHullShape from the real cylinder vertices — rolls naturally
+            cyl_model = Cylinder(resolution=16)
+            obj = PhysicsEntity(
+                model=cyl_model, scale=size, color=color.random_color(),
+                position=spawn_pos, mass=mass, friction=0.5
+            )
+            try:
+                hull = ConvexHullCollider(obj.entity.model)
+                obj.node.addShape(hull)
+            except Exception as e:
+                print(f"[Spawn] Cylinder hull fallback: {e}")
+                obj.collider = 'box'
+            obj.entity.collider = 'box' # Ursina picking
+        elif shape == "torus":
+            # CompoundShape of N segmented ConvexHulls — hole is traversable
+            torus_path = [Vec3(math.cos(math.radians(i * (360 / 30))), 0,
+                         math.sin(math.radians(i * (360 / 30)))) for i in range(31)]
+            cross_section = [Vec3(math.cos(math.radians(i * (360 / 8))) * 0.2,
+                            math.sin(math.radians(i * (360 / 8))) * 0.2, 0) for i in range(9)]
+            try:
+                torus_model = Pipe(path=torus_path, base_shape=cross_section, cap_ends=False)
+                torus_model.generate_normals()
+                torus_model.smooth = True
+                obj = PhysicsEntity(
+                    model=torus_model, scale=size, color=color.random_color(),
+                    position=spawn_pos, mass=mass, friction=0.5
+                )
+                hulls = TorusCompoundCollider(obj.entity.model, num_segments=8)
+                for hull_shape in hulls:
+                    obj.node.addShape(hull_shape)
+                if not hulls:
+                    print("[Spawn] Torus: no hull segments, using convex hull")
+                    hull = ConvexHullCollider(obj.entity.model)
+                    obj.node.addShape(hull)
+            except Exception as e:
+                print(f"[Spawn] Torus error: {e}")
+                obj = PhysicsEntity(
+                    model='sphere', scale=(size, size * 0.5, size),
+                    color=color.random_color(), position=spawn_pos,
+                    collider='sphere', mass=mass, friction=0.5
+                )
+            
+            obj.entity.collider = 'box'
+
         if obj:
-            # Propiedad custom para poder detectarlos rápido al hacer click
             obj.is_spawned_toy = True
-            obj.mass_value = mass # Para uso en posibles lógicas futuras
+            if hasattr(obj, 'entity'):
+                obj.entity.is_spawned_toy = True
+                obj.entity.parent_physics = obj
             self.spawned_objects.append(obj)
 
     def update(self):
@@ -405,23 +587,6 @@ class RobotArmSim:
                 print("Spawn cancelado")
             
             return # Bloquear otras interacciones mientras se está en modo spawn
-                
-        # Selección de objetos instanciados al hacer clic
-        if mouse.left:
-            # Evitar solapamientos si estamos arrastrando el gizmo
-            if self.gizmo.active_axis is not None:
-                pass
-            else:
-                if mouse.hovered_entity:
-                    # Gizmo sobre un objeto ya seleccionado
-                    if isinstance(mouse.hovered_entity, Button) and mouse.hovered_entity.parent == self.gizmo:
-                        pass # El clic en el gizmo se procesa en el propio gizmo
-                    # Objeto spawneado (toy)
-                    elif hasattr(mouse.hovered_entity, 'is_spawned_toy'):
-                        self.gizmo.attach_to(mouse.hovered_entity)
-                else:
-                    # Deseleccionar al hacer clic en el vacío
-                    self.gizmo.detach()
 
         # Control manual de fallback con el ratón (shift + clic)
         if held_keys['shift']:
@@ -446,23 +611,11 @@ class RobotArmSim:
         # ── Update collision debug visuals ──
         self.collision_mgr.update_debug_visuals()
             
-        # --- Aplicar Fuerzas Físicas (Gravedad y Colisiones) ---
-        for obj in list(self.spawned_objects):
-            # Seguridad: evitar objetos destruidos durante la iteración
-            if not obj or getattr(obj, 'destroyed', False):
-                if obj in self.spawned_objects:
-                    self.spawned_objects.remove(obj)
-                continue
-
-            if obj != self.gizmo.target: # No aplicar gravedad/colisión moviendo con Gizmo
-                # Gravedad
-                vel_y = 5.0 * time.dt * obj.mass_value
-                obj.y -= vel_y
-                
-                # Floor clamp
-                floor_y = obj.scale_y / 2
-                if obj.y < floor_y:
-                    obj.y = floor_y
+        # ── Limpiar objetos destruidos (Bullet maneja toda la física) ──
+        self.spawned_objects = [
+            o for o in self.spawned_objects
+            if o and not getattr(o, 'destroyed', False)
+        ]
 
     def _send_collision_status(self):
         """Send current collision state to the GUI."""
@@ -477,3 +630,28 @@ class RobotArmSim:
             self.feedback_sock.sendto(msg.encode(), GUI_ADDR)
         except Exception:
             pass
+
+    def input(self, key):
+        if key == 'left mouse down':
+            # Evitar solapamientos si estamos arrastrando el gizmo
+            if self.gizmo.active_axis is not None:
+                pass
+            else:
+                if mouse.hovered_entity:
+                    # Gizmo sobre un objeto ya seleccionado
+                    if isinstance(mouse.hovered_entity, Button) and getattr(mouse.hovered_entity, 'parent', None) in [self.gizmo.visuals_translate, self.gizmo.visuals_rotate, self.gizmo.visuals_scale]:
+                        pass # El clic en el gizmo se procesa en el propio gizmo
+                    else:
+                        # Direct lookup via the back-reference we assigned in spawn_object
+                        hovered = mouse.hovered_entity
+                        clicked_phys = None
+                        if hasattr(hovered, 'parent_physics'):
+                            clicked_phys = hovered.parent_physics
+                        elif hasattr(hovered, 'is_spawned_toy'):
+                            clicked_phys = hovered
+                        
+                        if clicked_phys:
+                            self.gizmo.attach_to(clicked_phys)
+                else:
+                    # Deseleccionar al hacer clic en el vacío
+                    self.gizmo.detach()

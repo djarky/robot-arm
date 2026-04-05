@@ -18,6 +18,7 @@ except:
 
 from ursina import *
 from panda3d.core import ConfigVariableString
+from ursina.physics import physics_handler
 
 # Importar la lógica de simulación modularizada
 from simulation import RobotArmSim
@@ -48,6 +49,7 @@ def update():
     sim.update()
 
 def input(key):
+    sim.input(key)
     # El TransformationGizmo ya maneja G, R, S, X y ESC internamente.
     # Mantenemos 'delete' como alternativa global.
     if key == 'delete':
@@ -55,6 +57,9 @@ def input(key):
             sim.gizmo.delete_target()
     elif key == 'f3':
         sim.collision_mgr.toggle_debug()
+    elif key == 'f4':
+        physics_handler.show_debug = not physics_handler.show_debug
+        print(f"[Physics] Bullet debug: {'ON' if physics_handler.show_debug else 'OFF'}")
 
 # Bucle principal de Ursina
 if __name__ == '__main__':

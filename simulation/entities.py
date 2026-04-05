@@ -161,13 +161,27 @@ class TransformationGizmo(Entity):
         
         if self.target:
             self.detach()
-            
-        self.target = entity
-        # Guardar copia real del color para no perderlo
-        self.target_original_color = color.Color(entity.color[0], entity.color[1], entity.color[2], entity.color[3])
         
-        self.position = entity.position
-        obj_size = max(entity.scale_x, entity.scale_y, entity.scale_z)
+        self.target = entity
+
+        # PhysicsEntity support: pause physics while manipulating
+        from ursina.physics import PhysicsEntity
+        if isinstance(entity, PhysicsEntity):
+            self._target_is_physics = True
+            self._was_kinematic = getattr(entity, '_kinematic', False)
+            entity.kinematic = True
+            entity.velocity = Vec3.zero
+            # Get color from internal entity
+            ent = entity.entity
+            self.target_original_color = color.Color(ent.color[0], ent.color[1], ent.color[2], ent.color[3])
+            self.position = entity.position
+            obj_size = max(entity.scale.x, entity.scale.y, entity.scale.z)
+        else:
+            self._target_is_physics = False
+            self.target_original_color = color.Color(entity.color[0], entity.color[1], entity.color[2], entity.color[3])
+            self.position = entity.position
+            obj_size = max(entity.scale_x, entity.scale_y, entity.scale_z)
+        
         self.world_scale = max(1.0, obj_size * 1.5)
         self.mode = None
         
@@ -178,10 +192,25 @@ class TransformationGizmo(Entity):
         self.enable()
 
     def detach(self):
-        if self.target and self.target_original_color:
-            self.target.color = self.target_original_color
+        if self.target:
+            # Restore color
+            if self.target_original_color:
+                try:
+                    if getattr(self, '_target_is_physics', False):
+                        self.target.entity.color = self.target_original_color
+                    else:
+                        self.target.color = self.target_original_color
+                except Exception:
+                    pass
+            
+            # PhysicsEntity: restore physics simulation
+            if getattr(self, '_target_is_physics', False):
+                was_kin = getattr(self, '_was_kinematic', False)
+                self.target.kinematic = was_kin
+        
         self.target = None
         self.target_original_color = None
+        self._target_is_physics = False
         self.disable()
 
     def input(self, key):
@@ -208,6 +237,19 @@ class TransformationGizmo(Entity):
             self.start_keyboard_op()
         elif key == 'x' and not self.mode: # Delete
             self.delete_target()
+        elif key == 'm' and not self.mode: # Toggle Mass
+            if getattr(self, '_target_is_physics', False):
+                old_mass = self.target.mass
+                # Toggle sequence: 1.0 -> 10.0 -> 50.0 -> 1.0
+                if old_mass <= 1.0:
+                    new_mass = 10.0
+                elif old_mass <= 10.0:
+                    new_mass = 50.0
+                else:
+                    new_mass = 1.0
+                # Directly update Bullet physics mass
+                self.target.mass = new_mass
+                print(f"[Gizmo] changed physics mass to: {new_mass}")
         
         # Bloqueo de ejes (solo si hay modo activo)
         if self.mode:
@@ -277,12 +319,19 @@ class TransformationGizmo(Entity):
             t = 0.4 + s * 0.6
             c1 = self.target_original_color
             c2 = color.cyan
-            self.target.color = color.Color(
+            blink_color = color.Color(
                 c1[0] + (c2[0] - c1[0]) * t,
                 c1[1] + (c2[1] - c1[1]) * t,
                 c1[2] + (c2[2] - c1[2]) * t,
                 c1[3] + (c2[3] - c1[3]) * t
             )
+            try:
+                if getattr(self, '_target_is_physics', False):
+                    self.target.entity.color = blink_color
+                else:
+                    self.target.color = blink_color
+            except Exception:
+                pass
         
         if not self.active_axis: return
         
@@ -383,14 +432,20 @@ class TransformationGizmo(Entity):
         target_to_del = self.target
         self.detach() # Desasociar primero para limpiar colores/referencias
         
-        import simulation
-        # Buscar en la lista de la simulación para eliminarlo
-        for scene_entity in scene.entities:
-            if hasattr(scene_entity, 'spawned_objects') and isinstance(scene_entity, simulation.RobotArmSim):
-                if target_to_del in scene_entity.spawned_objects:
-                    scene_entity.spawn_objects_cleanup = True # Flag opcional para robot_sim
-                    scene_entity.spawned_objects.remove(target_to_del)
-                    break
+        # Remove from simulation spawned_objects list
+        sim = getattr(scene, 'sim_instance', None)
+        if sim and hasattr(sim, 'spawned_objects'):
+            if target_to_del in sim.spawned_objects:
+                sim.spawned_objects.remove(target_to_del)
         
-        destroy(target_to_del)
+        # PhysicsEntity: remove from Bullet world properly
+        from ursina.physics import PhysicsEntity
+        if isinstance(target_to_del, PhysicsEntity):
+            try:
+                target_to_del.removeNode()
+            except Exception as e:
+                print(f"Error removing PhysicsEntity: {e}")
+        else:
+            destroy(target_to_del)
+        
         print("Objeto eliminado con éxito")
