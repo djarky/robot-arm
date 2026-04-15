@@ -88,6 +88,7 @@ class RobotArmSim:
     def __init__(self):
         # Socket para enviar datos de vuelta a la GUI
         self.feedback_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.feedback_sock.setblocking(False)
         
         # ── Configurar Motor de Físicas Bullet ──
         physics_handler.gravity = 50  # Escala del modelo ~100 unidades
@@ -115,7 +116,7 @@ class RobotArmSim:
 
         # ── Iluminación ──
         # shadows=False es CRÍTICO para evitar Segmentation Fault en este entorno Linux.
-        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=True)
+        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=False)
         self.dir_light.look_at(self.robot_root)
         self.ambient_light = AmbientLight(color=color.rgba(150, 150, 150, 0.6))
 
@@ -185,6 +186,31 @@ class RobotArmSim:
         self.cam = EditorCamera()
         self.cam.position = (0, 3, -8)  # Posición inicial cómoda
         self.cam.look_at(self.floor)
+        
+        # [HOTFIX] Cegar temporalmente a la EditorCamera del input nativo de los Gamepads.
+        # Esto soluciona el "drift" fantasma de los raw-nodes o mandos desconectados.
+        _original_cam_update = self.cam.update
+        def custom_cam_update():
+            from ursina import held_keys
+            # En lugar de iterar todos los keys, solo limpiamos los que usa EditorCamera
+            # para evitar el lag de procesamiento por frame.
+            keys_to_blind = [
+                'gamepad left stick x', 'gamepad left stick y',
+                'gamepad right stick x', 'gamepad right stick y',
+                'gamepad left trigger', 'gamepad right trigger'
+            ]
+            backups = {}
+            for k in keys_to_blind:
+                if k in held_keys:
+                    backups[k] = held_keys[k]
+                    held_keys[k] = 0
+            
+            _original_cam_update()
+            
+            for k, v in backups.items():
+                held_keys[k] = v
+            
+        self.cam.update = custom_cam_update
         
         # Networking (UDP receptor para no bloquear a la GUI principal)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -285,6 +311,38 @@ class RobotArmSim:
             # Revert
             self._apply_angle_raw(joint_index, old_angle)
             return False
+        return True
+
+    def _apply_angles_batched(self, angles_list, force=False):
+        """Apply a list of angles all at once with a single collision check.
+
+        This is much faster than calling _apply_angle joint by joint because
+        it only forces a Panda3D skeleton update once before and once after
+        the entire batch of changes.
+        """
+        num_to_apply = min(len(angles_list), self.NUM_JOINTS)
+        if force or not hasattr(self, 'collision_mgr'):
+            for i in range(num_to_apply):
+                self._apply_angle_raw(i, angles_list[i])
+            return True
+
+        # 1. Snapshot state BEFORE
+        # Force update ONCE to get accurate starting position
+        old_min_y = self.collision_mgr.get_min_probe_y(force_update=True)
+        old_angles = list(self.angles)
+
+        # 2. Apply ALL angles raw (fast, no physics update)
+        for i in range(num_to_apply):
+            self._apply_angle_raw(i, angles_list[i])
+
+        # 3. Check if the TOTAL change made things worse
+        # would_worsen calls get_min_probe_y(force_update=True) internally
+        if self.collision_mgr.would_worsen(old_min_y):
+            # Revert ALL if blocked
+            for i, old_a in enumerate(old_angles):
+                self._apply_angle_raw(i, old_a)
+            return False
+
         return True
 
     def _get_angle(self, joint_index):
@@ -494,17 +552,31 @@ class RobotArmSim:
                 msg = json.loads(last_data.decode())
                 if msg.get("type") == "angles":
                     incoming = msg["data"]
-                    # Aplicar ángulos recibidos a las rotaciones (sobrescribe la entrada del ratón)
-                    for i in range(min(len(incoming), self.NUM_JOINTS)):
-                        self._apply_angle(i, incoming[i])
+                    # Aplicar todos los ángulos recibidos en un solo bloque optimizado
+                    self._apply_angles_batched(incoming)
                     
-                    # Forzar sincronización de vuelta con la GUI. 
-                    # Si la colisión bloqueó y revirtió algún ángulo, esto hará que
-                    # el slider de Qt regrese instantáneamente a la posición permitida.
-                    self.sync_to_gui()
+                    if not hasattr(self, "_last_link_log") or time.time() - self._last_link_log > 1.0:
+                        print(f"[Link] Recibiendo ángulos: {incoming[0]:.1f}...")
+                        self._last_link_log = time.time()
                     
-                    # Send collision status back to GUI
-                    self._send_collision_status()
+                    # Forzar sincronización de vuelta con la GUI pero con límite de tasa (10Hz)
+                    # para evitar que el tráfico UDP de vuelta ralentice el renderizado de Ursina
+                    if not hasattr(self, "_last_sync_time") or time.time() - self._last_sync_time > 0.1:
+                        self.sync_to_gui()
+                        self._send_collision_status()
+                        self._last_sync_time = time.time()
+                elif msg.get("type") == "camera_offset":
+                    data = msg.get("data", [0.0]*7)
+                    x, y, z, zoom, pitch, roll, yaw = data
+                    # EditorCamera offsets: local moves
+                    if x or y or z:
+                        self.cam.position += self.cam.right * x + self.cam.up * y + self.cam.forward * z
+                    if zoom:
+                        self.cam.position += self.cam.forward * zoom
+                    if pitch or roll or yaw:
+                        self.cam.rotation_x += pitch
+                        self.cam.rotation_y += yaw
+                        self.cam.rotation_z += roll
                 elif msg.get("type") == "plan_path":
                     # GUI asks us to plan a collision-safe path
                     start = msg.get("start", list(self.angles))
