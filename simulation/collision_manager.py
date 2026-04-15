@@ -87,14 +87,14 @@ class CollisionManager:
     # Query helpers
     # ------------------------------------------------------------------
 
-    def get_probe_world_positions(self):
+    def get_probe_world_positions(self, force_update=True):
         """Return {probe_name: Vec3} with world-space positions.
 
         For probes with a non-zero local offset, we transform the offset
         through the joint's world matrix so it follows the bone correctly.
         """
         # CRITICAL: Force Panda3D to calculate the new skeleton pose before reading
-        if self.sim and hasattr(self.sim, 'actor'):
+        if force_update and self.sim and hasattr(self.sim, 'actor'):
             try:
                 self.sim.actor.getPartBundle('modelRoot').forceUpdate()
             except Exception:
@@ -112,13 +112,13 @@ class CollisionManager:
                 positions[name] = Vec3(world_pt.x, world_pt.y, world_pt.z)
         return positions
 
-    def get_min_probe_y(self):
+    def get_min_probe_y(self, force_update=True):
         """Return the lowest Y coordinate across all probes.
 
         This is the primary metric for collision — it tells us how
         close the nearest point of the arm is to the floor.
         """
-        positions = self.get_probe_world_positions()
+        positions = self.get_probe_world_positions(force_update=force_update)
         if not positions:
             return 999.0
         return min(pos.y for pos in positions.values())
