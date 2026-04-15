@@ -122,9 +122,11 @@ class CameraProcessorMixin:
                         target_j5
                     ]
                     
-                    # Smoothing and persistence
-                    EMA_ALPHA = 0.2
-                    MAX_STEP = 10.0
+                    # Smoothing and stability settings
+                    # EMA_ALPHA: lower = smoother but slower tracking.
+                    # MAX_STEP: max degrees change allowed per frame (at ~30fps).
+                    EMA_ALPHA = 0.1  # Smoother convergence
+                    MAX_STEP = 4.0   # Cap velocity to prevent jerky snaps
                     
                     if not self.camera_active_last_frame:
                          self.smooth_camera_angles = [float(t) for t in targets]
@@ -132,7 +134,17 @@ class CameraProcessorMixin:
 
                     for i in range(6):
                         diff = targets[i] - self.smooth_camera_angles[i]
-                        step = np.clip(diff, -MAX_STEP, MAX_STEP)
+                        
+                        # --- Biological Plausibility Check ---
+                        # If a joint "jumps" more than 45 degrees in 1/30th of a second,
+                        # it is likely a tracking error or a false positive.
+                        # We heavily damp these or hold the previous value.
+                        if abs(diff) > 45.0:
+                            # Jump too large: either ignore or damp extremely
+                            step = np.clip(diff, -1.0, 1.0) # Tiny movement to avoid freezing
+                        else:
+                            step = np.clip(diff, -MAX_STEP, MAX_STEP)
+
                         self.smooth_camera_angles[i] = (self.smooth_camera_angles[i] + step) * EMA_ALPHA + \
                                                        self.smooth_camera_angles[i] * (1 - EMA_ALPHA)
 
