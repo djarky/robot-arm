@@ -658,26 +658,29 @@ class RobotArmSim:
                         loaded_np.setScale(1)
                         print("[Spawn] WARN: No se pudieron calcular bounds, usando scale=1")
 
-                    # Crear PhysicsEntity con cubo invisible para la física base
+                    # Crear PhysicsEntity con box collider (el modelo está normalizado
+                    # a un cubo unitario, así que 'box' es una aproximación correcta)
                     obj = PhysicsEntity(
-                        model='cube', scale=size, color=color.clear,
-                        position=spawn_pos, mass=mass, friction=0.5
+                        model='cube', scale=size, color=color.white,
+                        position=spawn_pos, collider='box',
+                        mass=mass, friction=0.5
                     )
-                    # Ocultar la geometría del cubo dummy
+                    # Ocultar la geometría del cubo dummy usando stash
+                    # (hide() puede causar problemas de herencia visual)
                     cube_geoms = obj.entity.findAllMatches('**/+GeomNode')
                     for g in cube_geoms:
-                        g.hide()
+                        g.stash()
 
                     # Reparentar el modelo normalizado al entity visual
                     loaded_np.reparentTo(obj.entity)
-
-                    # Generar collider convex hull desde la geometría normalizada
-                    try:
-                        hull = ConvexHullCollider(loaded_np)
-                        obj.node.addShape(hull)
-                        print(f"[Spawn] ConvexHull generado para modelo custom")
-                    except Exception as hull_err:
-                        print(f"[Spawn] Hull fallback (box): {hull_err}")
+                    # Bloquear la herencia de color del padre para que los
+                    # materiales originales del GLB se mantengan intactos
+                    loaded_np.setColorScaleOff()
+                    # El box collider del PhysicsEntity es suficiente ya que el modelo
+                    # está normalizado a un cubo unitario. Los modelos GLB complejos
+                    # pueden tener 100k+ vértices, lo cual congela la simulación
+                    # si intentamos construir un ConvexHull vértice a vértice.
+                    print(f"[Spawn] Modelo custom spawneado con box collider")
                 else:
                     # Para OBJ y otros formatos, intentar carga directa de Ursina
                     obj = PhysicsEntity(
