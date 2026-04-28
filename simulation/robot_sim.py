@@ -229,14 +229,7 @@ class RobotArmSim:
         
         # ── Gestión de Spawn Relativo ──
         self.pending_spawn_data = None
-        # Cursor visual para el spawn (un icono/esfera semitransparente)
-        self.spawn_preview = Entity(
-            model='sphere', 
-            scale=0.3, 
-            color=color.rgba(1, 1, 0, 0.6), 
-            enabled=False,
-            always_on_top=True
-        )
+        self.spawn_preview = None  # Se crea dinámicamente al activar el modo spawn
         
         # ── Añadir Sliders Circulares a cada junta ──
         self.joint_sliders = []
@@ -462,6 +455,105 @@ class RobotArmSim:
             except Exception as e:
                 print(f"[Gripper] Error configurando '{part_name}': {e}")
 
+    # ------------------------------------------------------------------
+    # Spawn Preview (Blueprint)
+    # ------------------------------------------------------------------
+
+    BLUEPRINT_COLOR = color.rgba(0, 0.7, 1, 0.25)  # Cian semi-transparente
+
+    def _create_spawn_preview(self, shape, size, model_path=None):
+        """Crea un preview 'blueprint' del objeto a spawnear.
+        Muestra la forma real con apariencia holográfica."""
+        # Limpiar preview anterior (solo la entidad, NO el pending_spawn_data)
+        if self.spawn_preview:
+            destroy(self.spawn_preview)
+            self.spawn_preview = None
+
+        preview_model = None
+
+        if shape == "cube":
+            preview_model = 'cube'
+        elif shape == "sphere":
+            preview_model = 'sphere'
+        elif shape == "cylinder":
+            preview_model = Cylinder(resolution=16)
+        elif shape == "torus":
+            torus_path = [Vec3(math.cos(math.radians(i * (360 / 30))), 0,
+                         math.sin(math.radians(i * (360 / 30)))) for i in range(31)]
+            cross_section = [Vec3(math.cos(math.radians(i * (360 / 8))) * 0.2,
+                            math.sin(math.radians(i * (360 / 8))) * 0.2, 0) for i in range(9)]
+            try:
+                preview_model = Pipe(path=torus_path, base_shape=cross_section, cap_ends=False)
+            except Exception:
+                preview_model = 'sphere'
+        elif shape == "custom" and model_path:
+            # Intentar cargar el modelo GLB para el preview
+            ext = os.path.splitext(model_path)[1].lower()
+            if ext in ('.glb', '.gltf'):
+                try:
+                    panda_node = gltf.load_model(model_path)
+                    loaded_np = NodePath(panda_node)
+
+                    # Crear entity contenedor
+                    self.spawn_preview = Entity(
+                        scale=size,
+                        color=self.BLUEPRINT_COLOR,
+                        enabled=False,
+                        always_on_top=True,
+                        unlit=True
+                    )
+                    # Normalizar el modelo (misma lógica que spawn_object)
+                    bounds = loaded_np.getTightBounds()
+                    if bounds:
+                        min_p, max_p = bounds
+                        extent = max(
+                            max_p.getX() - min_p.getX(),
+                            max_p.getY() - min_p.getY(),
+                            max_p.getZ() - min_p.getZ()
+                        )
+                        if extent > 0:
+                            norm_scale = 1.0 / extent
+                            loaded_np.setScale(norm_scale)
+                            cx = (min_p.getX() + max_p.getX()) / 2.0
+                            cy = (min_p.getY() + max_p.getY()) / 2.0
+                            cz = (min_p.getZ() + max_p.getZ()) / 2.0
+                            loaded_np.setPos(-cx * norm_scale, -cy * norm_scale, -cz * norm_scale)
+
+                    loaded_np.reparentTo(self.spawn_preview)
+                    # Aplicar color blueprint a todos los geom nodes
+                    loaded_np.setColorScale(0, 0.7, 1, 0.25)
+                    loaded_np.setTransparency(True)
+
+                    self.spawn_preview.collider = None
+                    print(f"[Preview] GLB preview creado para: {model_path}")
+                    return
+                except Exception as e:
+                    print(f"[Preview] Error cargando GLB preview, usando cubo: {e}")
+                    preview_model = 'cube'
+            else:
+                preview_model = 'cube'
+        else:
+            preview_model = 'cube'
+
+        # Crear preview con forma estándar
+        self.spawn_preview = Entity(
+            model=preview_model,
+            scale=size,
+            color=self.BLUEPRINT_COLOR,
+            enabled=False,
+            always_on_top=True,
+            unlit=True
+        )
+        self.spawn_preview.collider = None
+        print(f"[Preview] Blueprint preview creado: {shape} (size={size})")
+
+    def _destroy_spawn_preview(self):
+        """Destruye el preview de spawn y limpia el estado."""
+        if self.spawn_preview:
+            destroy(self.spawn_preview)
+            self.spawn_preview = None
+        self.pending_spawn_data = None
+
     def spawn_object(self, shape, size, mass, position=None, model_path=None):
         """Spawnea objetos con físicas Bullet reales.
         Cada objeto usa el collider que corresponde EXACTAMENTE a su geometría."""
@@ -681,6 +773,10 @@ class RobotArmSim:
                         "mass": msg["mass"],
                         "model_path": msg.get("model_path")
                     }
+                    # Crear preview blueprint del objeto
+                    self._create_spawn_preview(
+                        msg["shape"], msg["size"], msg.get("model_path")
+                    )
                     print(f"Modo SPAWN activo para: {msg['shape']}")
                 elif msg.get("type") == "reset_camera":
                     self.load_camera_config(reset=True)
@@ -708,7 +804,7 @@ class RobotArmSim:
                 print("Error decodificando UDP:", e)
 
         # ── Lógica de Spawn Relativo (Preview y Click) ──
-        if self.pending_spawn_data:
+        if self.pending_spawn_data and self.spawn_preview:
             # Mostrar preview solo si el ratón toca una superficie (suelo u objeto)
             if mouse.world_point:
                 self.spawn_preview.enabled = True
@@ -716,25 +812,27 @@ class RobotArmSim:
                 h = self.pending_spawn_data["size"] / 2
                 self.spawn_preview.position = mouse.world_point + Vec3(0, h, 0)
                 
+                # Rotación lenta para efecto blueprint vivo
+                self.spawn_preview.rotation_y += time.dt * 30
+                
                 # Click izquierdo para confirmar spawn
                 if mouse.left:
+                    spawn_pos = Vec3(self.spawn_preview.position)
                     self.spawn_object(
                         self.pending_spawn_data["shape"],
                         self.pending_spawn_data["size"],
                         self.pending_spawn_data["mass"],
-                        position=self.spawn_preview.position,
+                        position=spawn_pos,
                         model_path=self.pending_spawn_data.get("model_path")
                     )
-                    self.pending_spawn_data = None
-                    self.spawn_preview.enabled = False
-                    print(f"Objeto spawneado en {self.spawn_preview.position}")
+                    print(f"Objeto spawneado en {spawn_pos}")
+                    self._destroy_spawn_preview()
             else:
                 self.spawn_preview.enabled = False
             
             # Click derecho o Escape para cancelar siempre (esté o no sobre superficie)
             if mouse.right or held_keys['escape']:
-                self.pending_spawn_data = None
-                self.spawn_preview.enabled = False
+                self._destroy_spawn_preview()
                 print("Spawn cancelado")
             
             return # Bloquear otras interacciones mientras se está en modo spawn
