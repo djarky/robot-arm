@@ -15,6 +15,10 @@ from .entities import CircularJointSlider, TransformationGizmo
 from .collision_manager import CollisionManager
 from .collision_aware_interpolator import CollisionAwareInterpolator
 
+# Importar motores de SVG e IK (Asegurar que las rutas sean correctas)
+from experiment_lab.svg_parser import SVGInterpreter
+from .ik_engine import IK_Solver
+
 
 # ── Bullet Collider Helpers ──────────────────────────────────────────
 
@@ -110,6 +114,16 @@ class RobotArmSim:
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
         Entity(model='cube', color=color.green, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
         Entity(model='cube', color=color.blue, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
+
+        # --- SVG/CNC State ---
+        self.ik_solver = IK_Solver()
+        self.svg_interpreter = SVGInterpreter(scale=0.02) # Ajuste de escala por defecto
+        self.svg_blueprint = None
+        self.cnc_trajectory = [] # Lista de waypoints de mundo
+        self.cnc_active = False
+        self.cnc_index = 0
+        self.cnc_speed = 2.0
+        self.drawing_trace = None # Mesh para el rastro visual
 
         # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
         self.robot_root = Entity(position=(0, -1.0, 0) )
@@ -803,8 +817,20 @@ class RobotArmSim:
                         print(f"DEBUG: win.saveScreenshot llamado hacia {path}")
                     except Exception as e:
                         print(f"DEBUG: Fallo al tomar screenshot: {e}")
+                elif msg.get("type") == "load_svg":
+                    path = msg.get("path")
+                    self._load_svg_blueprint(path)
+                elif msg.get("type") == "start_svg_trajectory":
+                    self._start_cnc_execution()
+                elif msg.get("type") == "stop_svg_trajectory":
+                    self.cnc_active = False
+                    print("[CNC] Trayectoria detenida por el usuario.")
             except Exception as e:
                 print("Error decodificando UDP:", e)
+
+        # ── Ejecución de Trayectoria CNC ──
+        if self.cnc_active and self.cnc_trajectory:
+            self._update_cnc_execution()
 
         # ── Lógica de Spawn Relativo (Preview y Click) ──
         if self.pending_spawn_data and self.spawn_preview:
@@ -868,6 +894,131 @@ class RobotArmSim:
             o for o in self.spawned_objects
             if o and not getattr(o, 'destroyed', False)
         ]
+
+    def _load_svg_blueprint(self, path):
+        """Carga el SVG y crea una representación visual (holograma)."""
+        if self.svg_blueprint:
+            destroy(self.svg_blueprint)
+        
+        raw_paths = self.svg_interpreter.parse_file(path)
+        if not raw_paths:
+            print(f"[CNC] Error: No se encontraron rutas en {path}")
+            return
+            
+        # Crear entidad visual usando líneas
+        self.svg_blueprint = Entity(
+            model=Mesh(vertices=[], mode='line', thickness=2),
+            color=color.cyan,
+            position=(2, 0.01, 0), # Posición inicial sobre la mesa
+            rotation_x=90, # Acostado en el plano XZ
+            always_on_top=True
+        )
+        # Guardamos las rutas crudas para procesar según la posición del blueprint
+        self.svg_blueprint.raw_paths = raw_paths
+        
+        # Generar mesh visual inicial
+        all_verts = []
+        min_x, max_x = 0, 0
+        min_z, max_z = 0, 0
+        
+        for path in raw_paths:
+            for i in range(len(path)-1):
+                x1 = path[i]['pos'][0] * self.svg_interpreter.scale
+                z1 = path[i]['pos'][1] * self.svg_interpreter.scale
+                x2 = path[i+1]['pos'][0] * self.svg_interpreter.scale
+                z2 = path[i+1]['pos'][1] * self.svg_interpreter.scale
+                
+                # Ursina Mesh mode='line' expects (x, y, z) pairs
+                p1 = (x1, 0, z1)
+                p2 = (x2, 0, z2)
+                all_verts.extend([p1, p2])
+                
+                min_x, max_x = min(min_x, x1, x2), max(max_x, x1, x2)
+                min_z, max_z = min(min_z, z1, z2), max(max_z, z1, z2)
+        
+        self.svg_blueprint.model.vertices = all_verts
+        self.svg_blueprint.model.generate()
+        
+        # ── Habilitar selección para Gizmo ──
+        # Crear un "picker" (colisionador invisible) que abarque todo el dibujo
+        w = max_x - min_x
+        d = max_z - min_z
+        cx = (min_x + max_x) / 2
+        cz = (min_z + max_z) / 2
+        
+        # El picker es hijo del blueprint, centrado en su contenido
+        self.svg_blueprint.picker = Entity(
+            parent=self.svg_blueprint,
+            model='cube',
+            color=color.clear,
+            position=(cx, 0, cz),
+            scale=(max(w, 0.1), 0.1, max(d, 0.1)),
+            collider='box'
+        )
+        # Marcar como 'spawned_toy' para que el selector de robot_sim lo reconozca
+        self.svg_blueprint.picker.is_spawned_toy = True
+        self.svg_blueprint.picker.parent_physics = self.svg_blueprint # Redireccionar Gizmo al padre
+        
+        self.svg_blueprint.is_spawned_toy = True 
+        self.spawned_objects.append(self.svg_blueprint) # Añadir a la lista general para 'delete'
+        print(f"[CNC] Blueprint cargado y seleccionable: {path}")
+
+    def _start_cnc_execution(self):
+        """Prepara los waypoints de mundo y arranca el bucle."""
+        if not self.svg_blueprint:
+            print("[CNC] Error: No hay SVG cargado.")
+            return
+            
+        # Transformar waypoints locales a coordenadas de mundo
+        self.cnc_trajectory = []
+        # El blueprint está acostado en XZ (rotX=90)
+        origin = self.svg_blueprint.position
+        rot = self.svg_blueprint.rotation_y
+        scale = self.svg_blueprint.scale_x
+        
+        world_paths = self.svg_interpreter.get_world_waypoints(
+            self.svg_blueprint.raw_paths,
+            origin=origin,
+            rotation=rot,
+            scale=scale
+        )
+        
+        # Aplanar lista de rutas en una sola secuencia de waypoints
+        for path in world_paths:
+            self.cnc_trajectory.extend(path)
+            
+        self.cnc_index = 0
+        self.cnc_active = True
+        print(f"[CNC] Iniciando trayectoria con {len(self.cnc_trajectory)} puntos.")
+
+    def _update_cnc_execution(self):
+        """Mueve el brazo hacia el siguiente waypoint."""
+        if self.cnc_index >= len(self.cnc_trajectory):
+            self.cnc_active = False
+            print("[CNC] Trayectoria completada.")
+            return
+            
+        target = self.cnc_trajectory[self.cnc_index]
+        pos = target['pos']
+        pen_down = target['pen']
+        
+        # Ajustar altura si la pinza debe estar arriba/abajo
+        draw_pos = list(pos)
+        if not pen_down:
+            draw_pos[1] += 1.5 # Levantar 1.5 unidades
+            
+        # Calcular IK
+        angles = self.ik_solver.solve(draw_pos)
+        
+        if angles:
+            self._apply_angles_batched(angles)
+            self.sync_to_gui()
+            
+            # Avanzar al siguiente punto si estamos "cerca" (interpolación simple)
+            self.cnc_index += 1
+        else:
+            # print(f"[CNC] Punto inalcanzable: {draw_pos}")
+            self.cnc_index += 1 # Saltar por ahora.
 
     def _send_collision_status(self):
         """Send current collision state to the GUI."""
