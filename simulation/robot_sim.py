@@ -462,7 +462,7 @@ class RobotArmSim:
             except Exception as e:
                 print(f"[Gripper] Error configurando '{part_name}': {e}")
 
-    def spawn_object(self, shape, size, mass, position=None):
+    def spawn_object(self, shape, size, mass, position=None, model_path=None):
         """Spawnea objetos con físicas Bullet reales.
         Cada objeto usa el collider que corresponde EXACTAMENTE a su geometría."""
         spawn_pos = position if position else (2.5, 3, 0)
@@ -523,6 +523,86 @@ class RobotArmSim:
                     model='sphere', scale=(size, size * 0.5, size),
                     color=color.random_color(), position=spawn_pos,
                     collider='sphere', mass=mass, friction=0.5
+                )
+        elif shape == "custom" and model_path:
+            try:
+                ext = os.path.splitext(model_path)[1].lower()
+                loaded_np = None
+
+                if ext in ('.glb', '.gltf'):
+                    # Usar gltf.load_model — misma técnica probada del brazo robótico
+                    panda_node = gltf.load_model(model_path)
+                    loaded_np = NodePath(panda_node)
+                    print(f"[Spawn] Modelo GLB cargado: {model_path}")
+
+                if loaded_np:
+                    # ── Normalizar geometría para que quepa en un cubo unitario ──
+                    # Esto es CRÍTICO para que el picker, gizmo y collider funcionen
+                    # correctamente con el parámetro 'size'.
+                    bounds = loaded_np.getTightBounds()
+                    if bounds:
+                        min_p, max_p = bounds
+                        extent = max(
+                            max_p.getX() - min_p.getX(),
+                            max_p.getY() - min_p.getY(),
+                            max_p.getZ() - min_p.getZ()
+                        )
+                        if extent > 0:
+                            norm_scale = 1.0 / extent
+                            loaded_np.setScale(norm_scale)
+                            # Centrar el modelo en el origen del entity
+                            center_x = (min_p.getX() + max_p.getX()) / 2.0
+                            center_y = (min_p.getY() + max_p.getY()) / 2.0
+                            center_z = (min_p.getZ() + max_p.getZ()) / 2.0
+                            loaded_np.setPos(
+                                -center_x * norm_scale,
+                                -center_y * norm_scale,
+                                -center_z * norm_scale
+                            )
+                            print(f"[Spawn] Modelo normalizado: extent={extent:.1f} → scale={norm_scale:.4f}")
+                        else:
+                            loaded_np.setScale(1)
+                    else:
+                        loaded_np.setScale(1)
+                        print("[Spawn] WARN: No se pudieron calcular bounds, usando scale=1")
+
+                    # Crear PhysicsEntity con cubo invisible para la física base
+                    obj = PhysicsEntity(
+                        model='cube', scale=size, color=color.clear,
+                        position=spawn_pos, mass=mass, friction=0.5
+                    )
+                    # Ocultar la geometría del cubo dummy
+                    cube_geoms = obj.entity.findAllMatches('**/+GeomNode')
+                    for g in cube_geoms:
+                        g.hide()
+
+                    # Reparentar el modelo normalizado al entity visual
+                    loaded_np.reparentTo(obj.entity)
+
+                    # Generar collider convex hull desde la geometría normalizada
+                    try:
+                        hull = ConvexHullCollider(loaded_np)
+                        obj.node.addShape(hull)
+                        print(f"[Spawn] ConvexHull generado para modelo custom")
+                    except Exception as hull_err:
+                        print(f"[Spawn] Hull fallback (box): {hull_err}")
+                else:
+                    # Para OBJ y otros formatos, intentar carga directa de Ursina
+                    obj = PhysicsEntity(
+                        model=model_path, scale=size, color=color.random_color(),
+                        position=spawn_pos, mass=mass, friction=0.5
+                    )
+                    hull = ConvexHullCollider(obj.entity.model)
+                    obj.node.addShape(hull)
+            except Exception as e:
+                print(f"[Spawn] Error cargando modelo custom ({model_path}): {e}")
+                import traceback
+                traceback.print_exc()
+                # Fallback a cubo si falla
+                obj = PhysicsEntity(
+                    model='cube', scale=size, color=color.random_color(),
+                    position=spawn_pos, collider='box',
+                    mass=mass, friction=0.7
                 )
 
         if obj:
@@ -598,7 +678,8 @@ class RobotArmSim:
                     self.pending_spawn_data = {
                         "shape": msg["shape"],
                         "size": msg["size"],
-                        "mass": msg["mass"]
+                        "mass": msg["mass"],
+                        "model_path": msg.get("model_path")
                     }
                     print(f"Modo SPAWN activo para: {msg['shape']}")
                 elif msg.get("type") == "reset_camera":
@@ -641,7 +722,8 @@ class RobotArmSim:
                         self.pending_spawn_data["shape"],
                         self.pending_spawn_data["size"],
                         self.pending_spawn_data["mass"],
-                        position=self.spawn_preview.position
+                        position=self.spawn_preview.position,
+                        model_path=self.pending_spawn_data.get("model_path")
                     )
                     self.pending_spawn_data = None
                     self.spawn_preview.enabled = False
