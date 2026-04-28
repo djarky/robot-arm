@@ -314,11 +314,15 @@ class TransformationGizmo(Entity):
         # Efecto de parpadeo (blinking) cuando está seleccionado sin modo activo
         if not self.mode:
             import time
-            # Pulsar entre color original y cian vibrante
+            # Pulsar entre color original y color de resaltado
             s = (math.sin(time.time() * 10) + 1) / 2 # 0 a 1
             t = 0.4 + s * 0.6
             c1 = self.target_original_color
-            c2 = color.cyan
+            # Si el objeto ya es cian, usar amarillo como color de parpadeo
+            if c1[0] < 0.2 and c1[1] > 0.8 and c1[2] > 0.8:
+                c2 = color.yellow
+            else:
+                c2 = color.cyan
             blink_color = color.Color(
                 c1[0] + (c2[0] - c1[0]) * t,
                 c1[1] + (c2[1] - c1[1]) * t,
@@ -333,9 +337,22 @@ class TransformationGizmo(Entity):
             except Exception:
                 pass
         
-        if not self.active_axis: return
+        # Actualizar la escala del Gizmo dinámicamente según el tamaño del objeto
+        if getattr(self.target, 'is_svg_blueprint', False):
+            extent = getattr(self.target, 'mesh_extent', 1.0)
+            avg_scale = (self.target.scale_x + self.target.scale_y + self.target.scale_z) / 3
+            self.world_scale = max(1.5, (extent * avg_scale) * 0.5)
+        else:
+            if getattr(self, '_target_is_physics', False):
+                obj_size = max(self.target.scale.x, self.target.scale.y, self.target.scale.z)
+            else:
+                obj_size = max(self.target.scale_x, self.target.scale_y, self.target.scale_z)
+            self.world_scale = max(1.0, obj_size * 1.5)
         
+        self.scale = self.world_scale
         self.position = self.target.position
+        
+        if not self.active_axis: return
         
         # Bloqueo de ejes visuales dinámicos
         if self.mode and self.active_axis == 'keyboard':
