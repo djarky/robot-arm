@@ -388,7 +388,7 @@ class CommunicationMixin:
         self.target_angles = wp["angles"]
         duration = max(wp["duration"], 0.05)
 
-        fps = 30
+        fps = 50
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
 

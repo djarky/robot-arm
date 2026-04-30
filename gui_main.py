@@ -51,7 +51,7 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
         # Timer for UDP feedback polling (every 50 ms)
         self.feedback_timer = QTimer()
         self.feedback_timer.timeout.connect(self.sync_from_sim)
-        self.feedback_timer.start(50)
+        self.feedback_timer.start(20)
 
         # Process / serial handles
         self.ser = None
@@ -212,15 +212,12 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
             frame_in, pose_landmarks_list, hand_landmarks_list, is_playing, self.is_left_handed
         )
         
-        # 2. Update Simulation/Arduino if tracking is active
+        # 2. Update Simulation via tracking (Source -> Sim)
         if not is_playing and arm_visible:
             # angles contains [base, shoulder, elbow, j3, j4, j5]
-            for i, angle in enumerate(angles):
-                if i < len(self.sliders):
-                    self.sliders[i].blockSignals(True)
-                    self.sliders[i].setValue(angle)
-                    self.sliders[i].blockSignals(False)
-            self.send_angles()
+            # We send to SIM ONLY. The feedback loop in sync_from_sim
+            # will update GUI sliders and Arduino.
+            self.send_camera_angles(angles)
         elif not arm_visible:
             self.camera_active_last_frame = False
 

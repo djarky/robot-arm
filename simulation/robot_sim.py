@@ -748,9 +748,9 @@ class RobotArmSim:
                         print(f"[Link] Recibiendo ángulos: {incoming[0]:.1f}...")
                         self._last_link_log = time.time()
                     
-                    # Forzar sincronización de vuelta con la GUI pero con límite de tasa (10Hz)
+                    # Forzar sincronización de vuelta con la GUI pero con límite de tasa (50Hz)
                     # para evitar que el tráfico UDP de vuelta ralentice el renderizado de Ursina
-                    if not hasattr(self, "_last_sync_time") or time.time() - self._last_sync_time > 0.1:
+                    if not hasattr(self, "_last_sync_time") or time.time() - self._last_sync_time > 0.02:
                         self.sync_to_gui()
                         self._send_collision_status()
                         self._last_sync_time = time.time()

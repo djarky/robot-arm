@@ -18,13 +18,26 @@
 #define PIN_STEP 3
 
 // Pines Servos SG995 (Todos los demás ejes son Servos)
-#define PIN_SERVO_1 9   // Usado sólo si USE_NEMA_MOTOR_1 es 0
-#define PIN_SERVO_2 10
-#define PIN_SERVO_3 11
-#define PIN_SERVO_4 5
-#define PIN_SERVO_5 6
-#define PIN_SERVO_6 7
-#define PIN_GRIPPER 8
+#define PIN_SERVO_1 7   // Usado sólo si USE_NEMA_MOTOR_1 es 0
+#define PIN_SERVO_2 8
+#define PIN_SERVO_3 9
+#define PIN_SERVO_4 10
+#define PIN_SERVO_5 11
+#define PIN_SERVO_6 12
+#define PIN_GRIPPER 6
+// ------------------------------------------------------------------------
+
+// ------------------------------------------------------------------------
+// CONFIGURACIÓN DE ORIENTACIÓN
+// ------------------------------------------------------------------------
+// Cambiar a true para invertir el sentido de giro de un motor específico.
+// Índices 0-5: Ejes 1-6. Índice 6: Gripper.
+bool INVERT_AXIS[] = {false, false, false, false, false, false, false};
+
+int applyOrientation(int axisIdx, int angle) {
+  if (axisIdx < 0 || axisIdx > 6) return angle;
+  return INVERT_AXIS[axisIdx] ? (180 - angle) : angle;
+}
 // ------------------------------------------------------------------------
 
 #if !USE_NEMA_MOTOR_1
@@ -121,7 +134,9 @@ void moveToNemaAngle(int targetAngle) {
   int stepDifference = abs(targetSteps - currentSteps);
   
   // Definir dirección
-  digitalWrite(PIN_DIR, (targetSteps > currentSteps) ? HIGH : LOW);
+  bool direction = (targetSteps > currentSteps);
+  if (INVERT_AXIS[0]) direction = !direction; // Invertir si está configurado
+  digitalWrite(PIN_DIR, direction ? HIGH : LOW);
   
   // Enviar pulsos
   for(int i = 0; i < stepDifference; i++) {
@@ -141,14 +156,14 @@ void setAllServos(int pos) {
   #if USE_NEMA_MOTOR_1
     moveToNemaAngle(pos);
   #else
-    axis1.write(pos);
+    axis1.write(applyOrientation(0, pos));
   #endif
   
-  axis2.write(pos);
-  axis3.write(pos);
-  axis4.write(pos);
-  axis5.write(pos);
-  axis6.write(pos);
+  axis2.write(applyOrientation(1, pos));
+  axis3.write(applyOrientation(2, pos));
+  axis4.write(applyOrientation(3, pos));
+  axis5.write(applyOrientation(4, pos));
+  axis6.write(applyOrientation(5, pos));
 }
 
 void parseAndControl(String data) {
@@ -177,17 +192,18 @@ void parseAndControl(String data) {
     #if USE_NEMA_MOTOR_1
       moveToNemaAngle(j0);
     #else
-      axis1.write(j0);
+      axis1.write(applyOrientation(0, j0));
     #endif
 
-    axis2.write(j1);
-    axis3.write(j2);
-    axis4.write(j3);
-    axis5.write(j4);
-    axis6.write(j5);
+    axis2.write(applyOrientation(1, j1));
+    axis3.write(applyOrientation(2, j2));
+    axis4.write(applyOrientation(3, j3));
+    axis5.write(applyOrientation(4, j4));
+    axis6.write(applyOrientation(5, j5));
     
     if (count >= 7) {
-      gripper.write(values[6] == 1 ? 90 : 0); // 1 = Cerrado, 0 = Abierto
+      int gripperVal = values[6] == 1 ? 90 : 0;
+      gripper.write(applyOrientation(6, gripperVal)); // 1 = Cerrado, 0 = Abierto
     }
     
     Serial.println("ACK"); // Confirmación de procesamiento
