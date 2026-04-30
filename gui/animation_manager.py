@@ -443,7 +443,7 @@ class AnimationManagerMixin:
     def _start_direct_interpolation(self, duration):
         """Start interpolation directly (no collision check), used as fallback."""
         self._waiting_for_path = False # Clear wait state
-        fps = 30
+        fps = 50
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
 
