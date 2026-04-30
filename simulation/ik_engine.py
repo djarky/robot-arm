@@ -84,13 +84,16 @@ class IK_Solver:
         
         angles = [theta0, theta1, theta2, theta3, theta4, theta5]
         
-        # Apply limits and rounding
-        clamped_angles = []
+        # Apply limits strictly
+        rounded_angles = []
         for i, a in enumerate(angles):
             low, high = self.limits[i]
-            clamped_angles.append(max(low, min(high, round(a, 2))))
+            val = round(a, 2)
+            if val < low or val > high:
+                return None  # Unreachable due to physical joint limits
+            rounded_angles.append(val)
             
-        return clamped_angles
+        return rounded_angles
 
 # Test if executed directly
 if __name__ == "__main__":
