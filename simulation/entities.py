@@ -312,7 +312,8 @@ class TransformationGizmo(Entity):
         if not self.target: return
         
         # Efecto de parpadeo (blinking) cuando está seleccionado sin modo activo
-        if not self.mode:
+        # Omitir para SVG blueprints (usan vertex colors para preview de alcanzabilidad)
+        if not self.mode and not getattr(self.target, 'is_svg_blueprint', False):
             import time
             # Pulsar entre color original y color de resaltado
             s = (math.sin(time.time() * 10) + 1) / 2 # 0 a 1

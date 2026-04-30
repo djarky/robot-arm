@@ -122,8 +122,10 @@ class RobotArmSim:
         self.cnc_trajectory = [] # Lista de waypoints de mundo
         self.cnc_active = False
         self.cnc_index = 0
-        self.cnc_speed = 2.0
-        self.drawing_trace = None # Mesh para el rastro visual
+        self.cnc_feedrate = 1.5 # Unidades por segundo
+        self.cnc_safety_height = 0.5 # Altura de levantamiento por defecto
+        self.drawing_trace = Entity(model=Mesh(vertices=[], mode='line', thickness=3), color=color.green, always_on_top=True)
+        self._trace_segments = []  # Lista de segmentos separados para el trazado
 
         # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
         self.robot_root = Entity(position=(0, -1.0, 0) )
@@ -826,12 +828,27 @@ class RobotArmSim:
                     self.cnc_active = False
                     self._send_cnc_status("stopped")
                     print("[CNC] Trayectoria detenida por el usuario.")
+                elif msg.get("type") == "reset_cnc":
+                    self._reset_cnc_trace()
+                elif msg.get("type") == "set_cnc_params":
+                    self.cnc_safety_height = msg.get("safety_height", 0.5)
+                    print(f"[CNC] Parámetros actualizados: Alt. Seguridad = {self.cnc_safety_height}")
             except Exception as e:
                 print("Error decodificando UDP:", e)
 
         # ── Ejecución de Trayectoria CNC ──
         if self.cnc_active and self.cnc_trajectory:
             self._update_cnc_execution()
+        
+        # ── Preview de Alcanzabilidad (solo en modo posicionamiento) ──
+        if (not self.cnc_active and self.svg_blueprint 
+                and self.gizmo.target == self.svg_blueprint):
+            if not hasattr(self, '_reach_timer'):
+                self._reach_timer = 0
+            self._reach_timer += time.dt
+            if self._reach_timer >= 0.2:
+                self._reach_timer = 0
+                self._update_blueprint_reachability()
 
         # ── Lógica de Spawn Relativo (Preview y Click) ──
         if self.pending_spawn_data and self.spawn_preview:
@@ -940,11 +957,12 @@ class RobotArmSim:
         d = max(max_z - min_z, 0.2)
         extent = max(w, d)
         
-        # ── Paso 3: Crear entidad con mesh centrado ──
+        # ── Paso 3: Crear entidad con mesh centrado y vertex colors ──
         # La posición del Entity ES el centro del dibujo.
+        initial_colors = [color.rgba(0, 200, 255, 180)] * len(centered_verts)  # Cyan por defecto
         self.svg_blueprint = Entity(
-            model=Mesh(vertices=centered_verts, mode='line', thickness=2),
-            color=color.cyan,
+            model=Mesh(vertices=centered_verts, colors=initial_colors, mode='line', thickness=3),
+            color=color.white,  # Blanco para que vertex colors se vean sin tinte
             position=(2, 0.05, 0),
             always_on_top=True,
             unlit=True
@@ -953,6 +971,18 @@ class RobotArmSim:
         self.svg_blueprint.is_svg_blueprint = True
         self.svg_blueprint.mesh_extent = extent
         self.svg_blueprint.mesh_offset_raw = (cx, cz)
+        self.svg_blueprint.vert_count = len(centered_verts)
+        
+        # ── Mapeo de segmentos a waypoints ──
+        # Cada par de vértices (2*s, 2*s+1) corresponde al segmento entre waypoint[i] y waypoint[i+1]
+        # Almacenar el índice del waypoint FINAL de cada segmento en la trayectoria plana
+        seg_wp_end = []  # Para cada segmento s, el índice plano del waypoint final
+        flat_idx = 0
+        for svg_path in raw_paths:
+            for i in range(len(svg_path) - 1):
+                seg_wp_end.append(flat_idx + i + 1)
+            flat_idx += len(svg_path)
+        self.svg_blueprint.seg_wp_end = seg_wp_end
         
         # ── Paso 4: Picker centrado en (0,0,0) local ──
         picker = Entity(
@@ -970,73 +1000,245 @@ class RobotArmSim:
         self.spawned_objects.append(self.svg_blueprint)
         
         self._send_cnc_status("loaded")
-        print(f"[CNC] Blueprint cargado: {path} ({len(centered_verts)//2} segmentos, extent={extent:.1f})")
+        print(f"[CNC] Blueprint cargado: {path} ({len(centered_verts)//2} segmentos, {len(seg_wp_end)} trazos, extent={extent:.1f})")
 
 
     def _start_cnc_execution(self):
-        """Prepara los waypoints de mundo y arranca el bucle."""
+        """Prepara los waypoints de mundo directamente desde las coordenadas del mesh,
+        garantizando que coincidan con la posición visual del blueprint."""
         if not self.svg_blueprint:
             print("[CNC] Error: No hay SVG cargado.")
             self._send_cnc_status("error", "No hay SVG cargado")
             return
-            
-        # Transformar waypoints locales a coordenadas de mundo
+        
+        bp = self.svg_blueprint
+        raw_paths = bp.raw_paths
+        
+        # Offset usado para centrar el mesh (calculado en _load_svg_blueprint)
+        cx, cz = getattr(bp, 'mesh_offset_raw', (0, 0))
+        scale_factor = self.svg_interpreter.scale  # 0.02 (px → mundo)
+        
+        # Transformación REAL de la entidad (world_position incluye jerarquía de padres)
+        entity_pos = bp.world_position
+        entity_scale = bp.world_scale
+        entity_rot_y = bp.rotation_y
+        
+        rad = math.radians(-entity_rot_y)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+        
+        print(f"[CNC] Blueprint transform: pos={entity_pos}, scale={entity_scale}, rot_y={entity_rot_y}")
+        print(f"[CNC] Mesh offset: cx={cx:.4f}, cz={cz:.4f}, svg_scale={scale_factor}")
+        
         self.cnc_trajectory = []
-        origin = self.svg_blueprint.position
-        rot = self.svg_blueprint.rotation_y
-        scale = self.svg_blueprint.scale_x
         
-        world_paths = self.svg_interpreter.get_world_waypoints(
-            self.svg_blueprint.raw_paths,
-            origin=origin,
-            rotation=rot,
-            scale=scale,
-            offset=getattr(self.svg_blueprint, 'mesh_offset_raw', (0,0))
-        )
+        for path in raw_paths:
+            for wp in path:
+                # 1. Coordenada local del mesh (misma fórmula que _load_svg_blueprint)
+                local_x = wp['pos'][0] * scale_factor - cx
+                local_z = wp['pos'][1] * scale_factor - cz
+                
+                # 2. Aplicar escala de la entidad (Ursina: mesh_vertex * entity.scale)
+                scaled_x = local_x * entity_scale.x
+                scaled_z = local_z * entity_scale.z
+                
+                # 3. Aplicar rotación Y (en plano XZ)
+                rot_x = scaled_x * cos_r - scaled_z * sin_r
+                rot_z = scaled_x * sin_r + scaled_z * cos_r
+                
+                # 4. Trasladar a posición del mundo
+                world_x = rot_x + entity_pos.x
+                world_z = rot_z + entity_pos.z
+                world_y = entity_pos.y  # Altura de dibujo = posición Y del blueprint
+                
+                self.cnc_trajectory.append({
+                    'pos': (world_x, world_y, world_z),
+                    'pen': wp['pen']
+                })
         
-        for wp_path in world_paths:
-            self.cnc_trajectory.extend(wp_path)
-            
         if not self.cnc_trajectory:
             print("[CNC] Error: Trayectoria vacía.")
             self._send_cnc_status("error", "Trayectoria vacía")
             return
         
+        # Log primeros waypoints para verificación
+        for i, wp in enumerate(self.cnc_trajectory[:3]):
+            print(f"  WP[{i}]: pos={wp['pos']}, pen={'DOWN' if wp['pen'] else 'UP'}")
+        
         self.cnc_index = 0
         self.cnc_active = True
+        
+        # Inicializar posición lógica del interpolador
+        first_wp = self.cnc_trajectory[0]
+        start_pos = Vec3(first_wp['pos'])
+        if not first_wp['pen']:
+            start_pos.y += self.cnc_safety_height
+        self.cnc_logical_pos = start_pos
+        
         self._send_cnc_status("running")
         print(f"[CNC] Iniciando trayectoria con {len(self.cnc_trajectory)} puntos.")
 
 
     def _update_cnc_execution(self):
-        """Mueve el brazo hacia el siguiente waypoint."""
+        """Mueve el brazo suavemente hacia el waypoint actual usando interpolación por tiempo."""
         if self.cnc_index >= len(self.cnc_trajectory):
             self.cnc_active = False
             self._send_cnc_status("completed")
             print("[CNC] Trayectoria completada.")
+            if hasattr(self, 'cnc_logical_pos'): del self.cnc_logical_pos
             return
             
         target = self.cnc_trajectory[self.cnc_index]
-        pos = target['pos']
+        target_pos = Vec3(target['pos'])
         pen_down = target['pen']
         
-        draw_pos = list(pos)
         if not pen_down:
-            draw_pos[1] += 1.5
-            
-        angles = self.ik_solver.solve(draw_pos)
+            target_pos.y += self.cnc_safety_height
+
+        # ── Interpolación de posición (Feedrate constante) ──
+        if not hasattr(self, 'cnc_logical_pos'):
+            self.cnc_logical_pos = Vec3(target_pos)
+
+        direction = target_pos - self.cnc_logical_pos
+        distance_to_wp = direction.length()
+        
+        # Velocidad de movimiento (más rápida si el pen está arriba)
+        current_speed = self.cnc_feedrate * (3.0 if not pen_down else 1.0)
+        move_step = current_speed * time.dt
+        
+        if move_step >= distance_to_wp or distance_to_wp < 0.001:
+            # Hemos llegado al waypoint
+            self.cnc_logical_pos = Vec3(target_pos)
+            self.cnc_index += 1
+        else:
+            # Avanzar proporcionalmente
+            self.cnc_logical_pos += direction.normalized() * move_step
+        
+        # ── Resolver IK y aplicar ──
+        angles = self.ik_solver.solve(self.cnc_logical_pos)
         
         if angles:
             self._apply_angles_batched(angles)
+            
+            # ── Actualizar rastro visual (solo si el pen está abajo) ──
+            if pen_down:
+                if not hasattr(self, '_last_trace_pos') or (self.cnc_logical_pos - self._last_trace_pos).length() > 0.02:
+                    # Usar pares de vértices para modo 'line': cada segmento es (v_prev, v_curr)
+                    if hasattr(self, '_last_trace_pos') and getattr(self, '_pen_was_down', False):
+                        # Continuación de trazo: añadir segmento desde el último punto
+                        self.drawing_trace.model.vertices.append(Vec3(self._last_trace_pos))
+                        self.drawing_trace.model.vertices.append(Vec3(self.cnc_logical_pos))
+                    # Si es el inicio de un nuevo trazo, solo guardamos la posición
+                    
+                    self.drawing_trace.model.generate()
+                    self._last_trace_pos = Vec3(self.cnc_logical_pos)
+            
+            self._pen_was_down = pen_down
             self.sync_to_gui()
-            self.cnc_index += 1
         else:
+            # Punto inalcanzable: avanzar al siguiente y actualizar posición lógica
+            print(f"[CNC] Punto inalcanzable en index {self.cnc_index}, saltando...")
             self.cnc_index += 1
-        
+            if self.cnc_index < len(self.cnc_trajectory):
+                next_wp = self.cnc_trajectory[self.cnc_index]
+                self.cnc_logical_pos = Vec3(next_wp['pos'])
+                if not next_wp['pen']:
+                    self.cnc_logical_pos.y += self.cnc_safety_height
+            # Marcar pen como up para no arrastrar líneas al punto siguiente
+            self._pen_was_down = False
+            if hasattr(self, '_last_trace_pos'): del self._last_trace_pos
+
         # Enviar progreso periódicamente (~5Hz)
         if self.cnc_index % max(1, len(self.cnc_trajectory) // 50) == 0:
             progress = int((self.cnc_index / len(self.cnc_trajectory)) * 100)
             self._send_cnc_status("running", progress=progress)
+        
+        # ── Actualizar colores de los trazos del blueprint (progreso visual) ──
+        bp = self.svg_blueprint
+        if bp and bp.model and hasattr(bp, 'seg_wp_end'):
+            seg_map = bp.seg_wp_end
+            num_segs = len(seg_map)
+            # Solo actualizar cada ~30 pasos para rendimiento
+            if num_segs > 0 and self.cnc_index % max(1, num_segs // 30) == 0:
+                col_done = color.rgba(50, 255, 50, 255)      # Verde brillante - completado
+                col_curr = color.rgba(255, 255, 0, 255)      # Amarillo - segmento actual
+                col_pending = color.rgba(0, 200, 255, 100)   # Cyan tenue - pendiente
+                
+                new_colors = []
+                for s in range(num_segs):
+                    end_idx = seg_map[s]
+                    if self.cnc_index > end_idx:
+                        c = col_done
+                    elif self.cnc_index >= end_idx - 1:
+                        c = col_curr
+                    else:
+                        c = col_pending
+                    new_colors.append(c)  # Vértice inicio del segmento
+                    new_colors.append(c)  # Vértice fin del segmento
+                
+                bp.model.colors = new_colors
+                bp.model.generate()
+
+    def _reset_cnc_trace(self):
+        """Limpia el rastro visual y reinicia el índice si no está en marcha."""
+        if self.drawing_trace:
+            self.drawing_trace.model.vertices = []
+            self.drawing_trace.model.generate()
+        self._trace_segments = []
+        
+        # Resetear colores de los trazos del blueprint a cyan por defecto
+        if self.svg_blueprint and self.svg_blueprint.model:
+            vert_count = getattr(self.svg_blueprint, 'vert_count', 0)
+            if vert_count > 0:
+                self.svg_blueprint.model.colors = [color.rgba(0, 200, 255, 180)] * vert_count
+                self.svg_blueprint.model.generate()
+        
+        if not self.cnc_active:
+            self.cnc_index = 0
+            self._send_cnc_status("loaded", progress=0)
+        
+        if hasattr(self, '_last_trace_pos'): del self._last_trace_pos
+        if hasattr(self, '_pen_was_down'): del self._pen_was_down
+        print("[CNC] Rastro visual reiniciado.")
+
+    def _update_blueprint_reachability(self):
+        """Colorea cada segmento de línea del SVG según alcanzabilidad del IK.
+        Verde = alcanzable, Rojo = fuera de rango."""
+        bp = self.svg_blueprint
+        if not bp or not bp.model or not bp.model.vertices:
+            return
+        
+        entity_pos = bp.world_position
+        entity_scale = bp.world_scale
+        entity_rot_y = bp.rotation_y
+        
+        rad = math.radians(-entity_rot_y)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+        
+        verts = bp.model.vertices
+        new_colors = []
+        
+        col_ok = color.rgba(0, 255, 100, 220)    # Verde brillante
+        col_bad = color.rgba(255, 40, 40, 240)    # Rojo brillante
+        
+        for v in verts:
+            # v es (local_x, 0, local_z) en espacio local del mesh
+            scaled_x = v[0] * entity_scale.x
+            scaled_z = v[2] * entity_scale.z
+            
+            rot_x = scaled_x * cos_r - scaled_z * sin_r
+            rot_z = scaled_x * sin_r + scaled_z * cos_r
+            
+            world_x = rot_x + entity_pos.x
+            world_z = rot_z + entity_pos.z
+            world_y = entity_pos.y
+            
+            result = self.ik_solver.solve((world_x, world_y, world_z))
+            new_colors.append(col_ok if result else col_bad)
+        
+        bp.model.colors = new_colors
+        bp.model.generate()
 
     def _send_cnc_status(self, status, error_msg=None, progress=0):
         """Envía el estado actual del CNC a la GUI del Lab."""
