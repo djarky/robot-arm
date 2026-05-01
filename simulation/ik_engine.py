@@ -10,7 +10,7 @@ class IK_Solver:
     - X, Z: Horizontal Plane
     """
     
-    def __init__(self, l1=1.09, l2=1.10, d1=0.65, tool_length=0.45):
+    def __init__(self, l1=1.089, l2=1.101, d1=0.557, tool_length=1.116):
         # Default lengths based on model analysis (scaled units)
         self.L1 = l1  # Shoulder to Elbow
         self.L2 = l2  # Elbow to Wrist

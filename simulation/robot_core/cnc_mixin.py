@@ -1,6 +1,6 @@
 import math
 import time
-from ursina import destroy, Entity, Mesh, color, Vec3
+from ursina import destroy, Entity, Mesh, color, Vec3, scene
 
 class CNCMixin:
     """Mixin for CNC and SVG logic."""
@@ -51,14 +51,16 @@ class CNCMixin:
         
         # ── Paso 3: Crear entidad con mesh centrado y vertex colors ──
         # La posición del Entity ES el centro del dibujo.
-        initial_colors = [color.rgba(0, 200, 255, 180)] * len(centered_verts)  # Cyan por defecto
+        initial_colors = [color.rgba32(0, 200, 255, 180)] * len(centered_verts)  # Cyan por defecto
         self.svg_blueprint = Entity(
+            parent=scene,
             model=Mesh(vertices=centered_verts, colors=initial_colors, mode='line', thickness=3),
-            color=color.white,  # Blanco para que vertex colors se vean sin tinte
-            position=(2, 0.05, 0),
+            color=color.white,
             always_on_top=True,
             unlit=True
         )
+        self.svg_blueprint.world_position = Vec3(1.85, 0.05, 0)
+
         self.svg_blueprint.raw_paths = raw_paths
         self.svg_blueprint.is_svg_blueprint = True
         self.svg_blueprint.mesh_extent = extent
@@ -248,9 +250,9 @@ class CNCMixin:
             num_segs = len(seg_map)
             # Solo actualizar cada ~30 pasos para rendimiento
             if num_segs > 0 and self.cnc_index % max(1, num_segs // 30) == 0:
-                col_done = color.rgba(50, 255, 50, 255)      # Verde brillante - completado
-                col_curr = color.rgba(255, 255, 0, 255)      # Amarillo - segmento actual
-                col_pending = color.rgba(0, 200, 255, 100)   # Cyan tenue - pendiente
+                col_done = color.rgba32(50, 255, 50, 255)      # Verde brillante - completado
+                col_curr = color.rgba32(255, 255, 0, 255)      # Amarillo - segmento actual
+                col_pending = color.rgba32(0, 200, 255, 100)   # Cyan tenue - pendiente
                 
                 new_colors = []
                 for s in range(num_segs):
@@ -278,7 +280,7 @@ class CNCMixin:
         if self.svg_blueprint and self.svg_blueprint.model:
             vert_count = getattr(self.svg_blueprint, 'vert_count', 0)
             if vert_count > 0:
-                self.svg_blueprint.model.colors = [color.rgba(0, 200, 255, 180)] * vert_count
+                self.svg_blueprint.model.colors = [color.rgba32(0, 200, 255, 180)] * vert_count
                 self.svg_blueprint.model.generate()
         
         if not self.cnc_active:
@@ -307,8 +309,8 @@ class CNCMixin:
         verts = bp.model.vertices
         new_colors = []
         
-        col_ok = color.rgba(0, 255, 100, 220)    # Verde brillante
-        col_bad = color.rgba(255, 40, 40, 240)    # Rojo brillante
+        col_ok = color.rgba32(0, 255, 100, 220)    # Verde brillante
+        col_bad = color.rgba32(255, 40, 40, 240)    # Rojo brillante
         
         for v in verts:
             # v es (local_x, 0, local_z) en espacio local del mesh
