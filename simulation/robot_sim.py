@@ -50,6 +50,7 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
 
         # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
         # Ajustado para Z-up: Verde(Y) es Horizontal adelante, Azul(Z) es Vertical arriba
+        # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
         Entity(model='cube', color=color.green, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
         Entity(model='cube', color=color.blue, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
@@ -71,41 +72,87 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
 
         # ── Iluminación ──
         # shadows=False es CRÍTICO para evitar Segmentation Fault en este entorno Linux.
-        self.dir_light = DirectionalLight(color=color.rgb(255, 255, 255), y=5, z=-5, shadows=False)
+        self.dir_light = DirectionalLight(color=color.white, y=5, z=-5, shadows=False)
         self.dir_light.look_at(self.robot_root)
-        self.ambient_light = AmbientLight(color=color.rgba(150, 150, 150, 0.6))
+        self.ambient_light = AmbientLight(color=color.rgba(150/255, 150/255, 150/255, 0.6))
 
         # ── Cargar modelo GLB con armadura ──
-        # El archivo está en el directorio superior del paquete simulation
         base_dir = os.path.dirname(os.path.dirname(__file__))
         model_path = os.path.join(base_dir, "robot_arm_sha.glb" )
         
-        # Cargamos el modelo usando la librería gltf directamente para evitar problemas con el registro de Panda3D
         from panda3d.core import NodePath
-        panda_model_node = gltf.load_model(model_path)
-        panda_model = NodePath(panda_model_node) # Envolver en NodePath es vital para Actor
+        panda_model = NodePath(gltf.load_model(model_path))
         
-        # Usamos copy=False para que Actor use el NodePath directamente en lugar de intentar recargarlo
-        # a través del sistema de archivos interno de Panda3D (que suele fallar aquí).
-        self.actor = Actor(panda_model, copy=False)
+        # El "parser por tramos" que menciona el usuario sugiere que debemos
+        # ser explícitos con las partes del modelo.
+        # Definimos el Actor con sus sub-armaduras integradas para evitar desprendimientos.
+        char1 = panda_model.find("**/1arm")
+        char2 = panda_model.find("**/2arm")
         
-        # Para evitar duplicados si hay partes que Actor y panda_model comparten, 
-        # y para asegurar que todo sea visible:
+        self.actor = Actor(
+            {"modelRoot": panda_model, "claw1": char1, "claw2": char2},
+            {"claw1": {"open": model_path}, "claw2": {"open": model_path}},
+            copy=False
+        )
+        
+        # Entity raíz de Ursina para el actor
         self.actor_entity = Entity(parent=self.robot_root, texture='texture.png')
-        
-        # Emparentar el actor a la escena de Ursina
         self.actor.reparentTo(self.actor_entity)
+        
+        # También emparentamos el resto del panda_model (partes estáticas como la base)
+        # para que no queden flotando o desaparezcan.
+        panda_model.reparentTo(self.actor_entity)
+        
+        # Volvemos a escala 1.0. El modelo ya es grande internamente (~100 unidades).
         self.actor.setScale(1)
         self.actor.setPos(0, 0, 0)
-        
-        # También emparentamos el panda_model original por si tiene partes estáticas 
-        # que el Actor no haya incluido (como la base fija)
-        panda_model.reparentTo(self.actor_entity)
+        panda_model.setScale(1)
+        panda_model.setPos(0, 0, 0)
+
+        # --- CORRECCIÓN: Vincular partes de la garra al brazo ---
+        # Al definir 'claw1' y 'claw2' como partes, Actor las extrae de la jerarquía.
+        # Usamos wrtReparentTo para mantener la posición y escala visual correcta.
+        j5_node = self.actor.exposeJoint(None, "modelRoot", "J5")
+        if not j5_node.isEmpty():
+            # Reparentar armaduras de animación manteniendo posición global
+            part1 = self.actor.getPart("claw1")
+            part2 = self.actor.getPart("claw2")
+            if part1: part1.wrtReparentTo(j5_node)
+            if part2: part2.wrtReparentTo(j5_node)
+            
+            # Reparentar geometría estática y referencia CNC
+            cnc_node = self.actor.find("**/CNC")
+            claw_base = self.actor.find("**/base-de-la-garra-parent")
+            
+            if not cnc_node.isEmpty(): 
+                cnc_node.wrtReparentTo(j5_node)
+                cnc_node.show()
+            if not claw_base.isEmpty(): 
+                claw_base.wrtReparentTo(j5_node)
+                claw_base.show()
+            
+            if part1: part1.show()
+            if part2: part2.show()
+            
+            print("[RobotSim] Garra y punto CNC vinculados a J5 con wrtReparentTo y show().")
         
         # Depuración de partes y juntas
         print(f"=== Partnames: {self.actor.getPartNames()} ===")
         print("=== Juntas del modelo ===")
         self.actor.listJoints()
+        
+        # --- Configurar Punto de Referencia CNC (Tip del actuador) ---
+        cnc_node = self.actor.find("**/CNC")
+        if not cnc_node.isEmpty():
+            j5_exp = self.actor.exposeJoint(None, "modelRoot", "J5")
+            if not j5_exp.isEmpty():
+                # Calculamos la distancia exacta del tip al centro de la última junta
+                offset_vec = cnc_node.getPos(j5_exp)
+                self.ik_solver.L_TOOL = offset_vec.length()
+                print(f"[IK] Distancia de herramienta (CNC) detectada: {self.ik_solver.L_TOOL:.4f}")
+        
+        # --- Configurar Actores de la Garra (Animación) ---
+        self._setup_gripper_actors(model_path)
 
         # Obtener nodos controlables para cada junta
         self.joint_controls = {}
@@ -203,13 +250,13 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
                 slider.position = (0,0,0) # Centrado en la junta
                 
                 # El robot mide aprox 100 unidades según el diagnóstico.
-                # Aumentamos a 12.0 según petición del usuario (150-200% del anterior 8.0)
+                # El robot mide aprox 100 unidades en Blender, pero lo manejamos en escala 1.0
                 slider.world_scale = 12.0 
                 
                 self.joint_sliders.append(slider)
 
         # ── Collision System ──
-        self.collision_mgr = CollisionManager(self, safety_margin=12.5)
+        self.collision_mgr = CollisionManager(self, safety_margin=1.25)
         self.collision_interpolator = CollisionAwareInterpolator(self)
 
         # ── Gripper Physics Colliders (pinza1, pinza2, etc.) ──
@@ -328,6 +375,10 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
                     if "feedrate" in msg:
                         self.cnc_feedrate = msg.get("feedrate", 1.5)
                     print(f"[CNC] Parámetros actualizados: Alt. Seguridad = {self.cnc_safety_height}, Velocidad = {getattr(self, 'cnc_feedrate', 1.5)}")
+                elif msg.get("type") == "gripper":
+                    # Apertura de la pinza: 0.0 (cerrado) a 1.0 (abierto)
+                    ratio = float(msg.get("data", 0.0))
+                    self.set_gripper_state(ratio)
             except Exception as e:
                 print("Error decodificando UDP:", e)
 

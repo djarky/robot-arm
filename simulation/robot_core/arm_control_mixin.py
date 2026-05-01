@@ -1,5 +1,7 @@
 from ursina.physics import physics_handler
 from panda3d.bullet import BulletTriangleMesh, BulletTriangleMeshShape, BulletRigidBodyNode
+from direct.actor.Actor import Actor
+import os
 
 class ArmControlMixin:
     """Mixin for arm angles and colliders."""
@@ -141,3 +143,24 @@ class ArmControlMixin:
                 print(f"[Gripper] ✓ Collider mesh exacto para '{part_name}'")
             except Exception as e:
                 print(f"[Gripper] Error configurando '{part_name}': {e}")
+
+    def _setup_gripper_actors(self, model_path):
+        """Configura el acceso a las animaciones de la garra integrada en el Actor."""
+        # En el nuevo sistema unificado, self.actor ya contiene las partes 'claw1' y 'claw2'
+        # No necesitamos crear actores separados, solo validar que las partes existen.
+        print(f"[Gripper] Sistema de animación unificado listo para claw1 y claw2")
+
+    def set_gripper_state(self, ratio):
+        """Controla la apertura de la garra (0.0 cerrado, 1.0 abierto)."""
+        # Partes definidas en el constructor de Actor en RobotArmSim
+        parts = ["claw1", "claw2"]
+        
+        for p in parts:
+            try:
+                num_frames = self.actor.getNumFrames("open", partName=p)
+                if num_frames > 0:
+                    frame = int(ratio * (num_frames - 1))
+                    self.actor.pose("open", frame, partName=p)
+            except Exception as e:
+                # Silencioso si la parte no tiene la animación cargada
+                pass

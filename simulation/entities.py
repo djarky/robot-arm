@@ -264,8 +264,10 @@ class TransformationGizmo(Entity):
         if key == 'escape':
             if self.mode:
                 self.cancel_op()
+            if self.target:
+                print(f"[DEBUG] OBJ: {getattr(self.target, 'name', 'unknown')} | Pos: {self.target.position} | Rot: {self.target.rotation} | Scale: {self.target.scale}")
             self.detach() # Soltar para reactivar físicas
-            print("Deseleccionado y físicas activas")
+            print("[INFO] Gizmo deseleccionado y físicas activas")
         elif key == 'right mouse down' and self.mode:
             self.cancel_op()
             
