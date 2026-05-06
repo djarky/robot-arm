@@ -207,8 +207,10 @@ class CNCMixin:
             self.cnc_logical_pos += direction.normalized() * move_step
         
         # ── Resolver IK y aplicar ──
+        # Ursina (Y-up) -> IK Solver (Z-up)
         local_target = self.cnc_logical_pos - self.robot_root.world_position
-        angles = self.ik_solver.solve(local_target)
+        ik_coords = (local_target.x, local_target.z, local_target.y)
+        angles = self.ik_solver.solve(ik_coords)
         
         if angles:
             self._apply_angles_batched(angles)
@@ -325,8 +327,10 @@ class CNCMixin:
             world_y = entity_pos.y
             
             # El IK asume base en Y=0. Ajustamos al offset de robot_root
+            # Ursina (Y-up) -> IK Solver (Z-up)
             local_target = Vec3(world_x, world_y, world_z) - self.robot_root.world_position
-            result = self.ik_solver.solve(local_target)
+            ik_coords = (local_target.x, local_target.z, local_target.y)
+            result = self.ik_solver.solve(ik_coords)
             new_colors.append(col_ok if result else col_bad)
         
         bp.model.colors = new_colors
