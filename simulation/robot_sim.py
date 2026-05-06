@@ -49,8 +49,6 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         )
 
         # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
-        # Ajustado para Z-up: Verde(Y) es Horizontal adelante, Azul(Z) es Vertical arriba
-        # Ejes XYZ para orientación (Rojo=X, Verde=Y, Azul=Z)
         Entity(model='cube', color=color.red, scale=(5, 0.05, 0.05), position=(2.5, 0.05, 0))
         Entity(model='cube', color=color.green, scale=(0.05, 0.05, 5), position=(0, 0.05, 2.5))
         Entity(model='cube', color=color.blue, scale=(0.05, 5, 0.05), position=(0, 2.5, 0))
@@ -71,100 +69,73 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         self.robot_root = Entity(position=(0, -1.0, 0) )
 
         # ── Iluminación ──
-        # shadows=False es CRÍTICO para evitar Segmentation Fault en este entorno Linux.
         self.dir_light = DirectionalLight(color=color.white, y=5, z=-5, shadows=False)
         self.dir_light.look_at(self.robot_root)
         self.ambient_light = AmbientLight(color=color.rgba(150/255, 150/255, 150/255, 0.6))
-
+        
         # ── Cargar modelo GLB con armadura ──
         base_dir = os.path.dirname(os.path.dirname(__file__))
-        model_path = os.path.join(base_dir, "robot_arm_sha.glb" )
+        model_path = os.path.join(base_dir, "robot_arm_sha.glb")
         
+        # Cargamos el modelo GLB via gltf.load_model (bypassa el registro de Panda3D)
         from panda3d.core import NodePath
-        panda_model = NodePath(gltf.load_model(model_path))
+        model_root = NodePath(gltf.load_model(model_path))
         
-        # El "parser por tramos" que menciona el usuario sugiere que debemos
-        # ser explícitos con las partes del modelo.
-        # Definimos el Actor con sus sub-armaduras integradas para evitar desprendimientos.
-        char1 = panda_model.find("**/1arm")
-        char2 = panda_model.find("**/2arm")
+        # IMPORTANTE: copy=False hace que el Actor "robe" el subárbol del Character
+        # (J0_axis) directamente del model_root. Esto es necesario para que
+        # controlJoint/exposeJoint funcionen sobre los nodos originales.
+        self.actor = Actor(model_root, copy=False)
         
-        self.actor = Actor(
-            {"modelRoot": panda_model, "claw1": char1, "claw2": char2},
-            {"claw1": {"open": model_path}, "claw2": {"open": model_path}},
-            copy=False
-        )
-        
-        # Entity raíz de Ursina para el actor
+        # Contenedor Ursina para agrupar actor + partes estáticas del modelo
         self.actor_entity = Entity(parent=self.robot_root, texture='texture.png')
+        
+        # El Actor contiene SOLO el subárbol animado (lo que cuelga del Character
+        # J0_axis): ejes, brazo, muñeca, garra, etc.
         self.actor.reparentTo(self.actor_entity)
-        
-        # También emparentamos el resto del panda_model (partes estáticas como la base)
-        # para que no queden flotando o desaparezcan.
-        panda_model.reparentTo(self.actor_entity)
-        
-        # Volvemos a escala 1.0. El modelo ya es grande internamente (~100 unidades).
         self.actor.setScale(1)
         self.actor.setPos(0, 0, 0)
-        panda_model.setScale(1)
-        panda_model.setPos(0, 0, 0)
+        
+        # model_root contiene las partes ESTÁTICAS que el Actor no incluyó:
+        # concretamente BASE/pata4 (la base fija del robot). Sin esta línea,
+        # la base del robot es INVISIBLE.
+        model_root.reparentTo(self.actor_entity)
+        
+        # --- GARRA (Gripper) ---
+        # base-de-la-garra-parent tiene un CharacterJointEffect que lo vincula
+        # automáticamente al hueso J4 del esqueleto. NO hay que reparentarlo
+        # manualmente — el esqueleto ya controla su posición.
+        # Nota: J5 no tiene geometría asociada (hueso vacío), se ignora.
+        
+        claw_anchor = self.actor.find("**/base-de-la-garra-parent")
+        if not claw_anchor.isEmpty():
+            # Forzar visibilidad de toda la cadena de la garra
+            claw_anchor.show()
+            for child in claw_anchor.findAllMatches("**"):
+                child.show()
+            print("[RobotSim] Garra detectada — posicionada por esqueleto (CharacterJointEffect → J4).")
+        else:
+            print("[RobotSim] Advertencia: base-de-la-garra-parent no encontrado.")
 
-        # --- CORRECCIÓN: Vincular partes de la garra al brazo ---
-        # Al definir 'claw1' y 'claw2' como partes, Actor las extrae de la jerarquía.
-        # Usamos wrtReparentTo para mantener la posición y escala visual correcta.
-        j5_node = self.actor.exposeJoint(None, "modelRoot", "J5")
-        if not j5_node.isEmpty():
-            # Reparentar armaduras de animación manteniendo posición global
-            part1 = self.actor.getPart("claw1")
-            part2 = self.actor.getPart("claw2")
-            if part1: part1.wrtReparentTo(j5_node)
-            if part2: part2.wrtReparentTo(j5_node)
-            
-            # Reparentar geometría estática y referencia CNC
-            cnc_node = self.actor.find("**/CNC")
-            claw_base = self.actor.find("**/base-de-la-garra-parent")
-            
-            if not cnc_node.isEmpty(): 
-                cnc_node.wrtReparentTo(j5_node)
-                cnc_node.show()
-            if not claw_base.isEmpty(): 
-                claw_base.wrtReparentTo(j5_node)
-                claw_base.show()
-            
-            if part1: part1.show()
-            if part2: part2.show()
-            
-            print("[RobotSim] Garra y punto CNC vinculados a J5 con wrtReparentTo y show().")
-        
-        # Depuración de partes y juntas
-        print(f"=== Partnames: {self.actor.getPartNames()} ===")
-        print("=== Juntas del modelo ===")
-        self.actor.listJoints()
-        
-        # --- Configurar Punto de Referencia CNC (Tip del actuador) ---
+        # --- Punto de Referencia CNC para IK ---
+        # Usamos J4 como referencia ya que J5 está vacío
+        j4_bone = self.actor.exposeJoint(None, "modelRoot", "J4")
         cnc_node = self.actor.find("**/CNC")
-        if not cnc_node.isEmpty():
-            j5_exp = self.actor.exposeJoint(None, "modelRoot", "J5")
-            if not j5_exp.isEmpty():
-                # Calculamos la distancia exacta del tip al centro de la última junta
-                offset_vec = cnc_node.getPos(j5_exp)
-                self.ik_solver.L_TOOL = offset_vec.length()
-                print(f"[IK] Distancia de herramienta (CNC) detectada: {self.ik_solver.L_TOOL:.4f}")
+        if not cnc_node.isEmpty() and not j4_bone.isEmpty():
+            offset_vec = cnc_node.getPos(j4_bone)
+            self.ik_solver.L_TOOL = offset_vec.length()
+            print(f"[IK] Distancia de herramienta (J4→CNC): {self.ik_solver.L_TOOL:.4f}")
         
         # --- Configurar Actores de la Garra (Animación) ---
         self._setup_gripper_actors(model_path)
 
         # Obtener nodos controlables para cada junta
         self.joint_controls = {}
-        self.rest_hprs = {}  # Guardar la rotación original (rest pose) de cada junta
-        
-        # Intentar obtener el nombre de la parte principal (usualmente 'modelRoot' o 'default')
+        self.rest_hprs = {}
         pnames = self.actor.getPartNames()
         primary_part = pnames[0] if pnames else "modelRoot"
         
         for jname in self.JOINT_NAMES:
             try:
-                # Usar el nombre de la parte detectado
                 ctrl = self.actor.controlJoint(None, primary_part, jname)
                 self.joint_controls[jname] = ctrl
                 self.rest_hprs[jname] = ctrl.getHpr()
@@ -174,100 +145,61 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
 
         # Eje de rotación por junta
         self.joint_axes = {
-            "J0": "YAW",
-            "J1": "ROLL",
-            "J2": "ROLL",
-            "J3": "YAW",
-            "J4": "PITCH",
-            "J5": "PITCH",
+            "J0": "YAW", "J1": "ROLL", "J2": "ROLL", "J3": "YAW", "J4": "PITCH", "J5": "PITCH",
         }
 
         self.angles = [0] * self.NUM_JOINTS
         
-        # Configuración de Cámara (EditorCamera) por defecto para que no se pierda el usuario
+        # Configuración de Cámara
         self.cam = EditorCamera()
-        self.cam.position = (0, 3, -8)  # Posición inicial cómoda
+        self.cam.position = (0, 3, -8)
         self.cam.look_at(self.floor)
         
-        # [HOTFIX] Cegar temporalmente a la EditorCamera del input nativo de los Gamepads.
-        # Esto soluciona el "drift" fantasma de los raw-nodes o mandos desconectados.
+        # Blinder para gamepad en cámara
         _original_cam_update = self.cam.update
         def custom_cam_update():
             from ursina import held_keys
-            # En lugar de iterar todos los keys, solo limpiamos los que usa EditorCamera
-            # para evitar el lag de procesamiento por frame.
-            keys_to_blind = [
-                'gamepad left stick x', 'gamepad left stick y',
-                'gamepad right stick x', 'gamepad right stick y',
-                'gamepad left trigger', 'gamepad right trigger'
-            ]
-            backups = {}
-            for k in keys_to_blind:
-                if k in held_keys:
-                    backups[k] = held_keys[k]
-                    held_keys[k] = 0
-            
+            keys_to_blind = ['gamepad left stick x', 'gamepad left stick y', 'gamepad right stick x', 'gamepad right stick y']
+            backups = {k: held_keys[k] for k in keys_to_blind if k in held_keys}
+            for k in backups: held_keys[k] = 0
             _original_cam_update()
-            
-            for k, v in backups.items():
-                held_keys[k] = v
-            
+            for k, v in backups.items(): held_keys[k] = v
         self.cam.update = custom_cam_update
         
-        # Networking (UDP receptor para no bloquear a la GUI principal)
+        # Networking
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Permite reutilizar el puerto inmediatamente si se reinicia la app
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 5005))
         self.sock.setblocking(False)
 
         self.last_save_time = time.time()
         self.load_camera_config()
-        
         self.spawned_objects = []
-        
-        # Instanciar el Gizmo Universal
         self.gizmo = TransformationGizmo()
-        
-        # ── Gestión de Spawn Relativo ──
         self.pending_spawn_data = None
-        self.spawn_preview = None  # Se crea dinámicamente al activar el modo spawn
+        self.spawn_preview = None
         
-        # ── Añadir Sliders Circulares a cada junta ──
+        # Sliders Circulares
         self.joint_sliders = []
         for i, jname in enumerate(self.JOINT_NAMES):
             ctrl = self.joint_controls.get(jname)
             if ctrl:
                 axis = self.joint_axes[jname]
-                # El radio base de la geometría es 1, lo escalaremos con world_scale
                 slider = CircularJointSlider(self, i, axis=axis, radius=1.0) 
-                
-                # Para que el slider esté EXACTAMENTE en el pivote de la junta,
-                # usamos exposeJoint que nos da un nodo que sigue el hueso.
-                # Lo emparentamos para que herede la posición/rotación del brazo.
                 exposed_node = self.actor.exposeJoint(None, "modelRoot", jname)
                 slider.parent = exposed_node
-                slider.position = (0,0,0) # Centrado en la junta
-                
-                # El robot mide aprox 100 unidades según el diagnóstico.
-                # El robot mide aprox 100 unidades en Blender, pero lo manejamos en escala 1.0
+                slider.position = (0,0,0)
                 slider.world_scale = 12.0 
-                
                 self.joint_sliders.append(slider)
 
-        # ── Collision System ──
         self.collision_mgr = CollisionManager(self, safety_margin=1.25)
         self.collision_interpolator = CollisionAwareInterpolator(self)
-
-        # ── Gripper Physics Colliders (pinza1, pinza2, etc.) ──
         self.gripper_physics = []
         self._setup_gripper_colliders()
-
         scene.sim_instance = self
 
     def update(self):
         # Recibir mensajes de control de la GUI principal.
-        # Leemos TODOS los paquetes en la cola hasta vaciarla para evitar lag.
         data_received = False
         last_data = None
         while True:
@@ -276,22 +208,14 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
                 last_data = data
                 data_received = True
             except BlockingIOError:
-                break # No hay más mensajes en la cola
+                break 
 
         if data_received and last_data:
             try:
                 msg = json.loads(last_data.decode())
                 if msg.get("type") == "angles":
                     incoming = msg["data"]
-                    # Aplicar todos los ángulos recibidos en un solo bloque optimizado
                     self._apply_angles_batched(incoming)
-                    
-                    if not hasattr(self, "_last_link_log") or time.time() - self._last_link_log > 1.0:
-                        print(f"[Link] Recibiendo ángulos: {incoming[0]:.1f}...")
-                        self._last_link_log = time.time()
-                    
-                    # Forzar sincronización de vuelta con la GUI pero con límite de tasa (50Hz)
-                    # para evitar que el tráfico UDP de vuelta ralentice el renderizado de Ursina
                     if not hasattr(self, "_last_sync_time") or time.time() - self._last_sync_time > 0.02:
                         self.sync_to_gui()
                         self._send_collision_status()
@@ -299,194 +223,105 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
                 elif msg.get("type") == "camera_offset":
                     data = msg.get("data", [0.0]*7)
                     x, y, z, zoom, pitch, roll, yaw = data
-                    # EditorCamera offsets: local moves
-                    if x or y or z:
-                        self.cam.position += self.cam.right * x + self.cam.up * y + self.cam.forward * z
-                    if zoom:
-                        self.cam.position += self.cam.forward * zoom
+                    if x or y or z: self.cam.position += self.cam.right * x + self.cam.up * y + self.cam.forward * z
+                    if zoom: self.cam.position += self.cam.forward * zoom
                     if pitch or roll or yaw:
                         self.cam.rotation_x += pitch
                         self.cam.rotation_y += yaw
                         self.cam.rotation_z += roll
                 elif msg.get("type") == "plan_path":
-                    # GUI asks us to plan a collision-safe path
                     start = msg.get("start", list(self.angles))
                     end = msg.get("end", list(self.angles))
                     duration = msg.get("duration", 1.0)
                     waypoints, evasion_needed = self.collision_interpolator.plan_safe_path(start, end)
-                    reply = json.dumps({
-                        "type": "path_result",
-                        "waypoints": waypoints,
-                        "duration": duration,
-                        "evasion": evasion_needed
-                    })
-                    try:
-                        self.feedback_sock.sendto(reply.encode(), GUI_ADDR)
-                    except Exception:
-                        pass
+                    reply = json.dumps({"type": "path_result", "waypoints": waypoints, "duration": duration, "evasion": evasion_needed})
+                    self.feedback_sock.sendto(reply.encode(), GUI_ADDR)
                 elif msg.get("type") == "spawn":
-                    # En lugar de spawnear de inmediato, entramos en modo "espera de click"
-                    self.pending_spawn_data = {
-                        "shape": msg["shape"],
-                        "size": msg["size"],
-                        "mass": msg["mass"],
-                        "model_path": msg.get("model_path")
-                    }
-                    # Crear preview blueprint del objeto
-                    self._create_spawn_preview(
-                        msg["shape"], msg["size"], msg.get("model_path")
-                    )
-                    print(f"Modo SPAWN activo para: {msg['shape']}")
+                    self.pending_spawn_data = {"shape": msg["shape"], "size": msg["size"], "mass": msg["mass"], "model_path": msg.get("model_path")}
+                    self._create_spawn_preview(msg["shape"], msg["size"], msg.get("model_path"))
                 elif msg.get("type") == "reset_camera":
                     self.load_camera_config(reset=True)
                 elif msg.get("type") == "screenshot":
                     path = msg.get("path", "pose_thumb.png")
-                    print(f"DEBUG: Sim recibio orden de screenshot. CWD: {os.getcwd()}")
-                    print(f"DEBUG: Intentando guardar en: {path}")
-                    
-                    # Usar Panda3D directamente para mayor control
                     from panda3d.core import Filename
                     try:
-                        # Asegurar que el directorio padre existe
                         parent_dir = os.path.dirname(path)
-                        if parent_dir and not os.path.exists(parent_dir):
-                            os.makedirs(parent_dir)
-                            print(f"DEBUG: Creado directorio {parent_dir}")
-                        
-                        # Usar base (builtin de Ursina/Panda3D)
+                        if parent_dir and not os.path.exists(parent_dir): os.makedirs(parent_dir)
                         fn = Filename.fromOsSpecific(path)
-                        base.win.saveScreenshot(fn) # type: ignore
-                        print(f"DEBUG: win.saveScreenshot llamado hacia {path}")
-                    except Exception as e:
-                        print(f"DEBUG: Fallo al tomar screenshot: {e}")
+                        base.win.saveScreenshot(fn)
+                    except Exception as e: print(f"Error screenshot: {e}")
                 elif msg.get("type") == "load_svg":
-                    path = msg.get("path")
-                    self._load_svg_blueprint(path)
+                    self._load_svg_blueprint(msg.get("path"))
                 elif msg.get("type") == "start_svg_trajectory":
                     self._start_cnc_execution()
                 elif msg.get("type") == "stop_svg_trajectory":
                     self.cnc_active = False
                     self._send_cnc_status("stopped")
-                    print("[CNC] Trayectoria detenida por el usuario.")
                 elif msg.get("type") == "reset_cnc":
                     self._reset_cnc_trace()
                 elif msg.get("type") == "set_cnc_params":
                     self.cnc_safety_height = msg.get("safety_height", 0.5)
-                    if "feedrate" in msg:
-                        self.cnc_feedrate = msg.get("feedrate", 1.5)
-                    print(f"[CNC] Parámetros actualizados: Alt. Seguridad = {self.cnc_safety_height}, Velocidad = {getattr(self, 'cnc_feedrate', 1.5)}")
+                    if "feedrate" in msg: self.cnc_feedrate = msg.get("feedrate", 1.5)
                 elif msg.get("type") == "gripper":
-                    # Apertura de la pinza: 0.0 (cerrado) a 1.0 (abierto)
-                    ratio = float(msg.get("data", 0.0))
-                    self.set_gripper_state(ratio)
+                    self.set_gripper_state(float(msg.get("data", 0.0)))
             except Exception as e:
-                print("Error decodificando UDP:", e)
+                print("Error UDP:", e)
 
-        # ── Ejecución de Trayectoria CNC ──
         if self.cnc_active and self.cnc_trajectory:
             self._update_cnc_execution()
         
-        # ── Preview de Alcanzabilidad (solo en modo posicionamiento) ──
-        if (not self.cnc_active and self.svg_blueprint 
-                and self.gizmo.target == self.svg_blueprint):
-            if not hasattr(self, '_reach_timer'):
-                self._reach_timer = 0
+        if (not self.cnc_active and self.svg_blueprint and self.gizmo.target == self.svg_blueprint):
+            if not hasattr(self, '_reach_timer'): self._reach_timer = 0
             self._reach_timer += time.dt
             if self._reach_timer >= 0.2:
                 self._reach_timer = 0
                 self._update_blueprint_reachability()
 
-        # ── Lógica de Spawn Relativo (Preview y Click) ──
         if self.pending_spawn_data and self.spawn_preview:
-            # Mostrar preview solo si el ratón toca una superficie (suelo u objeto)
             if mouse.world_point:
                 self.spawn_preview.enabled = True
-                # Ajustar la altura según el tamaño del objeto para que no se entierre
                 h = self.pending_spawn_data["size"] / 2
                 self.spawn_preview.position = mouse.world_point + Vec3(0, h, 0)
-                
-                # Rotación lenta para efecto blueprint vivo
                 self.spawn_preview.rotation_y += time.dt * 30
-                
-                # Click izquierdo para confirmar spawn
                 if mouse.left:
-                    spawn_pos = Vec3(self.spawn_preview.position)
-                    self.spawn_object(
-                        self.pending_spawn_data["shape"],
-                        self.pending_spawn_data["size"],
-                        self.pending_spawn_data["mass"],
-                        position=spawn_pos,
-                        model_path=self.pending_spawn_data.get("model_path")
-                    )
-                    print(f"Objeto spawneado en {spawn_pos}")
+                    self.spawn_object(self.pending_spawn_data["shape"], self.pending_spawn_data["size"], self.pending_spawn_data["mass"], position=Vec3(self.spawn_preview.position), model_path=self.pending_spawn_data.get("model_path"))
                     self._destroy_spawn_preview()
             else:
                 self.spawn_preview.enabled = False
-            
-            # Click derecho o Escape para cancelar siempre (esté o no sobre superficie)
             if mouse.right or held_keys['escape']:
                 self._destroy_spawn_preview()
-                print("Spawn cancelado")
-            
-            return # Bloquear otras interacciones mientras se está en modo spawn
+            return 
 
-        # Control manual de fallback con el ratón (shift + clic)
         if held_keys['shift']:
             if mouse.left:
-                # Shift+Left: rota J0 (base) con movimiento horizontal
-                cur = self._get_angle(0)
-                self._apply_angle(0, cur + mouse.velocity[0] * 100)
-                # y J1 con movimiento vertical
-                cur1 = self._get_angle(1)
-                self._apply_angle(1, cur1 - mouse.velocity[1] * 100)
+                self._apply_angle(0, self._get_angle(0) + mouse.velocity[0] * 100)
+                self._apply_angle(1, self._get_angle(1) - mouse.velocity[1] * 100)
             elif mouse.right:
-                # Shift+Right: rota J3 (codo)
-                cur2 = self._get_angle(2)
-                self._apply_angle(2, cur2 - mouse.velocity[1] * 100)
+                self._apply_angle(2, self._get_angle(2) - mouse.velocity[1] * 100)
             self.sync_to_gui()
         
-        # Guardar posición de cámara cada 5 segundos si ha cambiado notablemente
         if time.time() - self.last_save_time > 5:
             self.save_camera_config()
             self.last_save_time = time.time()
 
-        # ── Update collision debug visuals ──
         self.collision_mgr.update_debug_visuals()
-            
-        # ── Limpiar objetos destruidos (Bullet maneja toda la física) ──
-        self.spawned_objects = [
-            o for o in self.spawned_objects
-            if o and not getattr(o, 'destroyed', False)
-        ]
+        self.spawned_objects = [o for o in self.spawned_objects if o and not getattr(o, 'destroyed', False)]
 
     def input(self, key):
         if key == 'left mouse down':
-            # Evitar solapamientos si estamos arrastrando el gizmo
-            if self.gizmo.active_axis is not None:
-                pass
-            else:
+            if self.gizmo.active_axis is None:
                 if mouse.hovered_entity:
-                    # Gizmo sobre un objeto ya seleccionado
                     if isinstance(mouse.hovered_entity, Button) and getattr(mouse.hovered_entity, 'parent', None) in [self.gizmo.visuals_translate, self.gizmo.visuals_rotate, self.gizmo.visuals_scale]:
-                        pass # El clic en el gizmo se procesa en el propio gizmo
+                        pass 
                     else:
-                        # Direct lookup via the back-reference we assigned in spawn_object
                         hovered = mouse.hovered_entity
-                        clicked_phys = None
-                        if hasattr(hovered, 'parent_physics'):
-                            clicked_phys = hovered.parent_physics
-                        elif hasattr(hovered, 'is_spawned_toy'):
-                            clicked_phys = hovered
-                        
+                        clicked_phys = getattr(hovered, 'parent_physics', None) or (hovered if hasattr(hovered, 'is_spawned_toy') else None)
                         if clicked_phys:
                             self.gizmo.attach_to(clicked_phys)
-                            # SVG blueprints: ajustar escala del Gizmo y mostrar ejes
                             if getattr(clicked_phys, 'is_svg_blueprint', False):
                                 extent = getattr(clicked_phys, 'mesh_extent', 1.0)
                                 self.gizmo.world_scale = max(1.5, extent * 0.5)
                                 self.gizmo.position = clicked_phys.position
-                                # Mostrar ejes de traslación inmediatamente
                                 self.gizmo.visuals_translate.enabled = True
                 else:
-                    # Deseleccionar al hacer clic en el vacío
                     self.gizmo.detach()

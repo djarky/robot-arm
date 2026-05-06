@@ -145,22 +145,42 @@ class ArmControlMixin:
                 print(f"[Gripper] Error configurando '{part_name}': {e}")
 
     def _setup_gripper_actors(self, model_path):
-        """Configura el acceso a las animaciones de la garra integrada en el Actor."""
-        # En el nuevo sistema unificado, self.actor ya contiene las partes 'claw1' y 'claw2'
-        # No necesitamos crear actores separados, solo validar que las partes existen.
-        print(f"[Gripper] Sistema de animación unificado listo para claw1 y claw2")
+        """Configura sub-actores para las pinzas de la garra.
+        Esto permite usar el sistema de animaciones de Panda3D de forma limpia."""
+        self.gripper_actors = {}
+        
+        # Mapeo de personajes a sus animaciones correspondientes según la inspección del GLB
+        mapping = {
+            "1arm": "1armAction",
+            "2arm": "2armAction"
+        }
+        
+        for char_name, anim_name in mapping.items():
+            char_node = self.actor.find(f"**/{char_name}")
+            if not char_node.isEmpty():
+                try:
+                    # Creamos un Actor independiente para cada pinza
+                    # Esto permite usar pose() y otros métodos de alto nivel
+                    act = Actor(char_node, {anim_name: char_node})
+                    self.gripper_actors[char_name] = (act, anim_name)
+                    print(f"[Gripper] Actor vinculado para '{char_name}' con animación '{anim_name}'")
+                except Exception as e:
+                    print(f"[Gripper] Error al crear actor para '{char_name}': {e}")
+        
+        if not self.gripper_actors:
+            print("[Gripper] Advertencia: No se pudieron crear los sub-actores de la garra.")
 
     def set_gripper_state(self, ratio):
-        """Controla la apertura de la garra (0.0 cerrado, 1.0 abierto)."""
-        # Partes definidas en el constructor de Actor en RobotArmSim
-        parts = ["claw1", "claw2"]
-        
-        for p in parts:
+        """Controla la apertura de la garra (0.0 cerrado, 1.0 abierto).
+        Usa el sistema de poses del Actor para mayor precisión."""
+        if not hasattr(self, 'gripper_actors') or not self.gripper_actors:
+            return
+            
+        ratio = max(0.0, min(1.0, ratio))
+        for act, anim_name in self.gripper_actors.values():
             try:
-                num_frames = self.actor.getNumFrames("open", partName=p)
-                if num_frames > 0:
-                    frame = int(ratio * (num_frames - 1))
-                    self.actor.pose("open", frame, partName=p)
+                num_frames = act.getNumFrames(anim_name)
+                frame = int(ratio * (num_frames - 1))
+                act.pose(anim_name, frame)
             except Exception as e:
-                # Silencioso si la parte no tiene la animación cargada
                 pass
