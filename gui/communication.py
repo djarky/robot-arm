@@ -70,13 +70,24 @@ class CommunicationMixin:
     def toggle_gripper_state(self):
         """Toggle the gripper state and update its text/style."""
         self.gripper_active = self.btn_gripper.isChecked()
+        
+        # Determine the ratio (1.0 for open, 0.0 for closed)
+        ratio = 1.0 if self.gripper_active else 0.0
+        
+        # Update button text
         if self.gripper_active:
             self.btn_gripper.setText("CLOSE GRIPPER")
         else:
             self.btn_gripper.setText("OPEN GRIPPER")
         
-        # Send updated angles (including gripper) immediately
-        self.send_angles()
+        # 1. Send to Simulation (UDP)
+        msg = json.dumps({"type": "gripper", "data": ratio})
+        self.sock.sendto(msg.encode(), self.target_addr)
+        
+        # 2. Update physical Robot (Hardware) via Arduino
+        # This will be picked up in the next sync or we can trigger it now
+        angles = [s.value() for s in self.sliders]
+        self.send_to_arduino(angles)
 
     def spawn_request(self):
         """Send a spawn request for an object to the simulation."""

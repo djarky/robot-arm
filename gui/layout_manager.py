@@ -87,6 +87,26 @@ class LayoutMixin:
         self.collision_indicator.setToolTip("Sin colisión")
         joint_layout.addRow("Colisión:", self.collision_indicator)
 
+        # Gripper Toggle - Moved here for better visibility
+        self.btn_gripper = QPushButton("OPEN GRIPPER")
+        self.btn_gripper.setCheckable(True)
+        self.btn_gripper.setFixedHeight(35)
+        self.btn_gripper.setStyleSheet("""
+            QPushButton { 
+                background-color: #333; 
+                border: 1px solid #555; 
+                border-radius: 5px;
+                color: #ccc;
+            }
+            QPushButton:checked { 
+                background-color: #f57c00; 
+                color: white; 
+                font-weight: bold; 
+            }
+        """)
+        self.btn_gripper.clicked.connect(self.toggle_gripper_state)
+        joint_layout.addRow("Gripper:", self.btn_gripper)
+
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
 
@@ -141,14 +161,7 @@ class LayoutMixin:
         self.btn_connect.clicked.connect(self.toggle_serial)
         self.conn_status = QLabel("Status: Disconnected")
         
-        # Gripper Toggle
-        self.btn_gripper = QPushButton("OPEN GRIPPER")
-        self.btn_gripper.setCheckable(True)
-        self.btn_gripper.setStyleSheet("""
-            QPushButton { background-color: #333; border: 1px solid #555; }
-            QPushButton:checked { background-color: #f57c00; color: white; font-weight: bold; }
-        """)
-        self.btn_gripper.clicked.connect(self.toggle_gripper_state)
+        self.conn_status = QLabel("Status: Disconnected")
         
         self.packet_status = QLabel("RX: --")
         self.packet_status.setAlignment(Qt.AlignCenter)
@@ -156,7 +169,6 @@ class LayoutMixin:
 
         conn_layout.addLayout(port_layout)
         conn_layout.addWidget(self.btn_connect)
-        conn_layout.addWidget(self.btn_gripper)
         conn_layout.addWidget(self.conn_status)
         conn_layout.addWidget(self.packet_status)
         conn_group.setLayout(conn_layout)
