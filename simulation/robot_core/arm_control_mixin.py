@@ -159,11 +159,34 @@ class ArmControlMixin:
             char_node = self.actor.find(f"**/{char_name}")
             if not char_node.isEmpty():
                 try:
-                    # Creamos un Actor independiente para cada pinza
-                    # Esto permite usar pose() y otros métodos de alto nivel
-                    act = Actor(char_node, {anim_name: char_node})
+                    # Guardamos el padre original antes de crear el Actor
+                    # (El constructor de Actor reparenta el nodo a su propia raíz)
+                    original_parent = char_node.getParent()
+                    
+                    # Creamos un Actor independiente usando el nodo original (copy=False)
+                    act = Actor(char_node, {anim_name: char_node}, copy=False)
+                    
+                    # Re-vinculamos el Actor a la jerarquía original
+                    if original_parent:
+                        act.reparentTo(original_parent)
+                    
+                    # Resetear transformaciones locales (limpieza estándar)
+                    act.clearTransform()
+                    char_node.clearTransform()
+                    
+                    # AUTO-ALINEACIÓN: Resetear la posición de los huesos con offset
+                    # Esto pegará las pinzas a la tapa de la garra.
+                    act.update()
+                    for bone_name in ['gear', 'J-dump-c']:
+                        try:
+                            ctrl = act.controlJoint(None, 'modelRoot', bone_name)
+                            if ctrl and not ctrl.isEmpty():
+                                ctrl.setPos(0, 0, 0)
+                        except Exception:
+                            pass
+                    
                     self.gripper_actors[char_name] = (act, anim_name)
-                    print(f"[Gripper] Actor vinculado para '{char_name}' con animación '{anim_name}'")
+                    print(f"[Gripper] Actor vinculado y alineado para '{char_name}'")
                 except Exception as e:
                     print(f"[Gripper] Error al crear actor para '{char_name}': {e}")
         
