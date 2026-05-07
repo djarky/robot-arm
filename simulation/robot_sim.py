@@ -101,11 +101,6 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         model_root.reparentTo(self.actor_entity)
         
         # --- GARRA (Gripper) ---
-        # base-de-la-garra-parent tiene un CharacterJointEffect que lo vincula
-        # automáticamente al hueso J4 del esqueleto. NO hay que reparentarlo
-        # manualmente — el esqueleto ya controla su posición.
-        # Nota: J5 no tiene geometría asociada (hueso vacío), se ignora.
-        
         claw_anchor = self.actor.find("**/base-de-la-garra-parent")
         if not claw_anchor.isEmpty():
             # Forzar visibilidad de toda la cadena de la garra
