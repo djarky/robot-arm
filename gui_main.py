@@ -145,17 +145,17 @@ class RobotGui(CommunicationMixin, PoseManagerMixin, AnimationManagerMixin,
         # Interpolation engine state
         self.interp_timer = QTimer()
         self.interp_timer.timeout.connect(self.update_interpolation)
-        self.target_angles = [0, 0, 0, 0, 0, 0]
+        self.target_angles = [0, 0, 0, 0, 0]
         self.current_interp_sequence = []
         self.current_seq_index = -1
         self.interp_steps = 0
         self.interp_count = 0
-        self.interp_deltas = [0, 0, 0, 0, 0, 0]
-        self.current_angles_f = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.interp_deltas = [0, 0, 0, 0, 0]
+        self.current_angles_f = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.playback_direction = 1
 
         # Camera smoothing state
-        self.smooth_camera_angles = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 6 ejes para tracking de cámara
+        self.smooth_camera_angles = [0.0, 0.0, 0.0, 0.0, 0.0]  # 5 ejes para tracking de cámara
         self.camera_active_last_frame = False
         self.is_left_handed = False
 

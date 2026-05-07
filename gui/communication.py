@@ -309,7 +309,7 @@ class CommunicationMixin:
                 with open("config.json", "r") as f:
                     config = json.load(f)
 
-                angles = config.get("joint_angles", [0, 0, 0, 0, 0, 0])
+                angles = config.get("joint_angles", [0, 0, 0, 0, 0])
                 # Padding para configs antiguas con menos de 5 ángulos
                 while len(angles) < len(self.sliders):
                     angles.append(0)

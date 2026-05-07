@@ -25,8 +25,8 @@ from .robot_core.constants import GUI_ADDR, DEFAULT_CAM_POS, DEFAULT_CAM_ROT
 
 class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMixin):
     # Nombres de las juntas del modelo GLB (armadura "0arm")
-    JOINT_NAMES = ["J0", "J1","J2", "J3", "J4", "J5"]
-    NUM_JOINTS = 6
+    JOINT_NAMES = ["J0", "J1","J2", "J3", "J4"]
+    NUM_JOINTS = 5
 
     def __init__(self):
         # Socket para enviar datos de vuelta a la GUI
@@ -140,7 +140,7 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
 
         # Eje de rotación por junta
         self.joint_axes = {
-            "J0": "YAW", "J1": "ROLL", "J2": "ROLL", "J3": "YAW", "J4": "PITCH", "J5": "PITCH",
+            "J0": "YAW", "J1": "ROLL", "J2": "ROLL", "J3": "YAW", "J4": "PITCH",
         }
 
         self.angles = [0] * self.NUM_JOINTS

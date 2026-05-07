@@ -15,7 +15,7 @@ class CameraProcessorMixin:
         """
         h_f, w_f, _ = frame.shape
         
-        # Default angles (persistence) - now 6 axes
+        # Default angles (persistence) - now 5 axes
         current_angles = list(self.smooth_camera_angles)
         
         arm_visible = False
@@ -62,10 +62,9 @@ class CameraProcessorMixin:
                     dy_normalized = (j_wrist.y - j_shoulder.y) * 4
                     target_base = int(np.clip(dy_normalized * 90, -90, 90))
 
-                    # 2. Hand Logic Layer: Extract J3, J4, J5
+                    # 2. Hand Logic Layer: Extract J3, J4
                     target_j3 = current_angles[3]
                     target_j4 = current_angles[4]
-                    target_j5 = current_angles[5]
 
                     if hand_landmarks_list:
                         hand_lms = hand_landmarks_list[0]
@@ -93,14 +92,8 @@ class CameraProcessorMixin:
                         depth_norm = np.clip((hand_size - 0.1) / (0.3 - 0.1), 0.0, 1.0)
                         target_j4 = int(depth_norm * 180 - 90)
 
-                        # --- J5: Gripper (Thumb-Index distance) ---
-                        pinch_dist = np.sqrt((index_tip.x - thumb_tip.x)**2 + (index_tip.y - thumb_tip.y)**2)
-                        # Normalize by hand size to be scale-invariant
-                        pinch_ratio = pinch_dist / (hand_size + 1e-6)
-                        # Closed if ratio < 0.2, open if ratio > 0.8
-                        gripper_norm = np.clip((pinch_ratio - 0.2) / (0.8 - 0.2), 0.0, 1.0)
-                        # Map to [-90, 90] (assuming 90 is open)
-                        target_j5 = int(gripper_norm * 180 - 90)
+                        # (J5 logic removed as joint J5 is deleted)
+                        pass
 
                         # Drawing Hand skeleton
                         for pair in [(0,1), (0,5), (5,9), (9,13), (13,17), (0,17), (1,2), (2,3), (3,4), 
@@ -118,8 +111,7 @@ class CameraProcessorMixin:
                         -target_shoulder, 
                         -target_elbow,
                         target_j3, 
-                        target_j4, 
-                        target_j5
+                        target_j4
                     ]
                     
                     # Smoothing and stability settings
@@ -132,7 +124,7 @@ class CameraProcessorMixin:
                          self.smooth_camera_angles = [float(t) for t in targets]
                          self.camera_active_last_frame = True
 
-                    for i in range(6):
+                    for i in range(5):
                         diff = targets[i] - self.smooth_camera_angles[i]
                         
                         # --- Biological Plausibility Check ---

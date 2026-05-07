@@ -18,7 +18,7 @@ class IK_Solver:
         self.L_TOOL = tool_length # Wrist center to tip
         
         # Joint limits (degrees)
-        self.limits = [(-90, 90)] * 6
+        self.limits = [(-90, 90)] * 5
 
     def solve(self, target_pos, target_up=None):
         """
@@ -26,7 +26,7 @@ class IK_Solver:
         target_pos: (x, y, z) in world coordinates.
         target_up: (ux, uy, uz) direction for the gripper (default: pointing down).
         
-        Returns: List of 6 angles [j0...j5] in degrees, or None if unreachable.
+        Returns: List of 5 angles [j0...j4] in degrees, or None if unreachable.
         """
         tx, ty, tz = target_pos
         
@@ -82,7 +82,7 @@ class IK_Solver:
         theta3 = 0
         theta5 = 0
         
-        angles = [theta0, theta1, theta2, theta3, theta4, theta5]
+        angles = [theta0, theta1, theta2, theta3, theta4]
         
         # Apply limits strictly
         rounded_angles = []
