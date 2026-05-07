@@ -1,6 +1,7 @@
 from ursina.physics import physics_handler
 from panda3d.bullet import BulletTriangleMesh, BulletTriangleMeshShape, BulletRigidBodyNode
 from direct.actor.Actor import Actor
+from panda3d.core import Vec3
 import os
 
 class ArmControlMixin:
@@ -174,19 +175,46 @@ class ArmControlMixin:
                     act.clearTransform()
                     char_node.clearTransform()
                     
-                    # AUTO-ALINEACIÓN: Resetear la posición de los huesos con offset
-                    # Esto pegará las pinzas a la tapa de la garra.
+                    # AUTO-ALINEACIÓN Y ESCALA: 
+                    # 1. Resetear posición de los huesos para pegar las piezas a la tapa.
+                    # 2. Sincronizar escala mundial con la base de la garra.
                     act.update()
+                    
+                    # Buscamos la referencia de posición (tapa) y escala (base)
+                    tapa_ref = self.actor.find("**/tapa-garra")
+                    base_ref = self.actor.find("**/base-de-la-garra")
+                    ref_scale = base_ref.getScale(self.actor.getParent()) if not base_ref.isEmpty() else 1.0
+                    
+                    # Ajuste fino de posición (en unidades del mundo)
+                    # Queremos bajar las pinzas 0.5 unidades hacia abajo en el mundo.
+                    # Usamos getRelativeVector para que el offset siempre sea hacia el suelo.
+                    world_offset = Vec3(0, -0.5, 0)
+                    local_offset = act.getRelativeVector(self.actor.getParent(), world_offset)
+                    
+                    # Calcular posición de la tapa relativa al Actor de la pinza
+                    if not tapa_ref.isEmpty():
+                        target_pos = tapa_ref.getPos(act) + local_offset
+                    else:
+                        target_pos = (0, 0, 0)
+                    
                     for bone_name in ['gear', 'J-dump-c']:
                         try:
                             ctrl = act.controlJoint(None, 'modelRoot', bone_name)
                             if ctrl and not ctrl.isEmpty():
-                                ctrl.setPos(0, 0, 0)
+                                ctrl.setPos(target_pos)
                         except Exception:
                             pass
                     
+                    # CORRECCIÓN DE POSICIÓN Y TAMAÑO: 
+                    # Sincronizar escala mundial con la base y resetear offsets locales
+                    # para que la malla se pegue exactamente al hueso alineado.
+                    for mesh in act.findAllMatches("**/+GeomNode"):
+                        mesh.setPos(0, 0, 0)
+                        mesh.setHpr(0, 0, 0)
+                        mesh.setScale(self.actor.getParent(), ref_scale)
+                    
                     self.gripper_actors[char_name] = (act, anim_name)
-                    print(f"[Gripper] Actor vinculado y alineado para '{char_name}'")
+                    print(f"[Gripper] Actor vinculado, alineado y escalado para '{char_name}'")
                 except Exception as e:
                     print(f"[Gripper] Error al crear actor para '{char_name}': {e}")
         

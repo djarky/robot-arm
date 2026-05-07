@@ -22,8 +22,7 @@ PROBE_CONFIG = [
     ("J2_tip",    "J2", Vec3(0, 0, 0.5)),
     ("J3_wrist",  "J3", Vec3(0, 0, 0)),
     ("J4_hand",   "J4", Vec3(0, 0, 0)),
-    ("J5_grip",   "J5", Vec3(0, 0, 0)),
-    ("J5_tip",    "J5", Vec3(0, 0, 0.3)),
+    ("CNC",       "CNC", Vec3(0, 0, 0)),
 ]
 
 
@@ -75,7 +74,15 @@ class CollisionManager:
         """Create exposed joints for each probe point."""
         for probe_name, joint_name, offset in PROBE_CONFIG:
             try:
-                exposed = self.sim.actor.exposeJoint(None, "modelRoot", joint_name)
+                # Si el nombre es CNC, lo buscamos como un nodo en lugar de una junta
+                if joint_name == "CNC":
+                    exposed = self.sim.actor.find("**/CNC")
+                else:
+                    exposed = self.sim.actor.exposeJoint(None, "modelRoot", joint_name)
+                
+                if not exposed or exposed.isEmpty():
+                    raise ValueError("Node or Joint not found")
+                    
                 self.probe_exposed[probe_name] = exposed
                 self.probe_configs[probe_name] = (joint_name, offset)
                 self.collision_state[probe_name] = False
@@ -197,8 +204,10 @@ class CollisionManager:
             True if the configuration causes collision.
         """
         saved = list(self.sim.angles)
+        num_joints = self.sim.NUM_JOINTS
         for i, a in enumerate(angles):
-            self.sim._apply_angle_raw(i, a)
+            if i < num_joints:
+                self.sim._apply_angle_raw(i, a)
         colliding = self.is_colliding()
         for i, a in enumerate(saved):
             self.sim._apply_angle_raw(i, a)

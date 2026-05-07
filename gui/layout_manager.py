@@ -70,8 +70,8 @@ class LayoutMixin:
         joint_group = QGroupBox("Manual Control")
         joint_layout = QFormLayout()
         self.sliders = []
-        joint_labels = ["J0", "J1", "J2", "J3", "J4", "J5"]
-        for i in range(6):
+        joint_labels = ["J0", "J1", "J2", "J3", "J4"]
+        for i in range(5):
             s = QSlider(Qt.Horizontal)
             s.setRange(-90, 90)
             s.setValue(0)

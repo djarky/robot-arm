@@ -36,8 +36,8 @@ class CircularJointSlider(Entity):
             # J0 y J3 son YAW y funcionan bien en Horizontal (rot_x=0)
             self.rotation_x = 0
         elif self.axis_type == 'PITCH': # Pitch (X)
-            # J4 y J5 son PITCH y funcionan bien en Horizontal (0,0,0)
-            if joint_index in [4, 5]:
+            # J4 es PITCH y funciona bien en Horizontal (0,0,0)
+            if joint_index == 4:
                 self.rotation_x = 0
             else:
                 self.rotation_z = 90

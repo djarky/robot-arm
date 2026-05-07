@@ -105,11 +105,12 @@ class CollisionAwareInterpolator:
     # ------------------------------------------------------------------
 
     def _pad(self, angles):
-        """Ensure angles list has exactly 6 elements."""
+        """Ensure angles list has exactly NUM_JOINTS elements."""
+        n = getattr(self.sim, "NUM_JOINTS", 5)
         a = list(angles)
-        while len(a) < 6:
+        while len(a) < n:
             a.append(0)
-        return a[:6]
+        return a[:n]
 
     def _lerp_angles(self, a, b, t):
         """Linearly interpolate between two angle lists."""
