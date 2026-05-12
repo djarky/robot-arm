@@ -3,6 +3,7 @@ import socket
 import json
 import math
 import time
+import numpy as np
 from ursina import *
 from panda3d.core import NodePath, Filename, TransformState, LPoint3f, GeomVertexReader
 from direct.actor.Actor import Actor
@@ -55,7 +56,7 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
 
         # --- SVG/CNC State ---
         self.ik_solver = IK_Solver()
-        self.svg_interpreter = SVGInterpreter(scale=0.02) # Ajuste de escala por defecto
+        self.svg_interpreter = SVGInterpreter(scale=0.02) # Escala original (1px = 0.02 unidades)
         self.svg_blueprint = None
         self.cnc_trajectory = [] # Lista de waypoints de mundo
         self.cnc_active = False
@@ -64,6 +65,10 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         self.cnc_safety_height = 0.5 # Altura de levantamiento por defecto
         self.drawing_trace = Entity(model=Mesh(vertices=[], mode='line', thickness=3), color=color.green, always_on_top=True)
         self._trace_segments = []  # Lista de segmentos separados para el trazado
+        
+        # Láser de depuración visual (CNC Tip -> Target)
+        self.debug_laser = Entity(model=Mesh(vertices=[Vec3(0,0,0), Vec3(0,0,0)], mode='line', thickness=5), color=color.red, always_on_top=True)
+        self.debug_laser.visible = False
 
         # Root parent para mover todo el robot fácilmente (solicitud del usuario: moverlo más abajo)
         self.robot_root = Entity(position=(0, -1.0, 0) )
@@ -114,16 +119,40 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         # --- Punto de Referencia CNC para IK ---
         # Usamos J4 como referencia ya que J5 está vacío
         j4_bone = self.actor.exposeJoint(None, "modelRoot", "J4")
-        cnc_node = self.actor.find("**/CNC")
-        if not cnc_node.isEmpty() and not j4_bone.isEmpty():
-            offset_vec = cnc_node.getPos(j4_bone)
-            self.ik_solver.L_TOOL = offset_vec.length()
-            print(f"[IK] Distancia de herramienta (J4→CNC): {self.ik_solver.L_TOOL:.4f}")
+        self.cnc_node = self.actor.find("**/CNC") # Guardar referencia para actualizaciones dinámicas
+        
+        if not self.cnc_node.isEmpty() and not j4_bone.isEmpty():
+            # Obtener vector 3D J4 -> CNC
+            offset_vec = self.cnc_node.getPos(j4_bone)
+            # Panda3D (X, Y, Z) -> IK Solver (X, Y, Z) 
+            # Panda: X=lateral, Y=adelante, Z=arriba
+            # IK_Solver: X=adelante, Y=arriba, Z=lateral
+            self.ik_solver.TOOL_OFFSET = np.array([offset_vec.y, offset_vec.z, offset_vec.x])
+            self.ik_solver.L_TOOL = np.linalg.norm(self.ik_solver.TOOL_OFFSET)
+            print(f"[IK] Herramienta Calibrada (J4→CNC): Offset={self.ik_solver.TOOL_OFFSET}, L={self.ik_solver.L_TOOL:.4f}")
         
         # --- Configurar Actores de la Garra (Animación) ---
         self._setup_gripper_actors(model_path)
 
-        # Obtener nodos controlables para cada junta
+        # --- Calibración Dinámica de Segmentos para IK ---
+        # 1. D1: Altura desde la base (modelRoot) hasta el hombro (J1)
+        j1_bone = self.actor.exposeJoint(None, "modelRoot", "J1")
+        if not j1_bone.isEmpty():
+            self.ik_solver.D1 = j1_bone.getPos(model_root).z 
+            print(f"[IK] D1 (Base→Hombro): {self.ik_solver.D1:.4f}")
+            
+        # 2. L1: Longitud del brazo (J1 → J2)
+        j2_bone = self.actor.exposeJoint(None, "modelRoot", "J2")
+        if not j1_bone.isEmpty() and not j2_bone.isEmpty():
+            self.ik_solver.L1 = j2_bone.getPos(j1_bone).length()
+            print(f"[IK] L1 (Hombro→Codo): {self.ik_solver.L1:.4f}")
+            
+        # 3. L2: Longitud del antebrazo (J2 → J4)
+        if not j2_bone.isEmpty() and not j4_bone.isEmpty():
+            self.ik_solver.L2 = j4_bone.getPos(j2_bone).length()
+            print(f"[IK] L2 (Codo→Muñeca): {self.ik_solver.L2:.4f}")
+
+        # --- Obtener nodos controlables para cada junta ---
         self.joint_controls = {}
         self.rest_hprs = {}
         pnames = self.actor.getPartNames()
@@ -193,6 +222,20 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         self._setup_gripper_colliders()
         scene.sim_instance = self
 
+    def recalibrate_tool(self):
+        """Mide la posición actual del nodo CNC respecto a la muñeca (J4)."""
+        j4_bone = self.actor.exposeJoint(None, "modelRoot", "J4")
+        if not hasattr(self, 'cnc_node') or self.cnc_node.isEmpty() or j4_bone.isEmpty():
+            return
+            
+        offset_vec = self.cnc_node.getPos(j4_bone)
+        # Panda3D (X, Y, Z) -> IK Solver (X, Y, Z)
+        # Panda: X=lateral, Y=adelante, Z=arriba
+        # IK_Solver: X=adelante, Y=arriba, Z=lateral
+        self.ik_solver.TOOL_OFFSET = np.array([offset_vec.y, offset_vec.z, offset_vec.x])
+        self.ik_solver.L_TOOL = np.linalg.norm(self.ik_solver.TOOL_OFFSET)
+        print(f"[IK] Re-calibración: Offset={self.ik_solver.TOOL_OFFSET}, L={self.ik_solver.L_TOOL:.4f}")
+
     def update(self):
         # Recibir mensajes de control de la GUI principal.
         data_received = False
@@ -213,7 +256,6 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
                     self._apply_angles_batched(incoming)
                     if not hasattr(self, "_last_sync_time") or time.time() - self._last_sync_time > 0.02:
                         self.sync_to_gui()
-                        self._send_collision_status()
                         self._last_sync_time = time.time()
                 elif msg.get("type") == "camera_offset":
                     data = msg.get("data", [0.0]*7)
@@ -298,6 +340,34 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         if time.time() - self.last_save_time > 5:
             self.save_camera_config()
             self.last_save_time = time.time()
+
+        # ── Actualizar Láser de Depuración ──
+        # Mostrar si hay una trayectoria activa O si hay un blueprint cargado (apuntando al primer punto)
+        show_laser = False
+        target_pos = Vec3(0,0,0)
+        
+        if getattr(self, 'cnc_active', False):
+            show_laser = True
+            target_pos = getattr(self, 'cnc_logical_pos', Vec3(0,0,0))
+        elif self.svg_blueprint and getattr(self, 'cnc_trajectory', []):
+            show_laser = True
+            # Point to the center of the blueprint before execution
+            target_pos = self.svg_blueprint.world_position
+            
+        if show_laser and hasattr(self, 'cnc_node') and not self.cnc_node.isEmpty():
+            self.debug_laser.visible = True
+            # Panda3D native call for world position
+            tip_pos = Vec3(self.cnc_node.getPos(base.render))
+            
+            # Actualizar malla
+            self.debug_laser.model.vertices = [tip_pos, target_pos]
+            self.debug_laser.model.generate()
+            
+            dist = (tip_pos - target_pos).length()
+            self.debug_laser.color = color.green if dist < 0.05 else color.red
+        else:
+            if hasattr(self, 'debug_laser'):
+                self.debug_laser.visible = False
 
         self.collision_mgr.update_debug_visuals()
         self.spawned_objects = [o for o in self.spawned_objects if o and not getattr(o, 'destroyed', False)]
