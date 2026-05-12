@@ -10,12 +10,13 @@ class IK_Solver:
     - X, Z: Horizontal Plane
     """
     
-    def __init__(self, l1=1.089, l2=1.101, d1=0.557, tool_length=1.116):
+    def __init__(self, l1=1.089, l2=1.101, d1=0.557, tool_offset=(0, 1.116, 0)):
         # Default lengths based on model analysis (scaled units)
         self.L1 = l1  # Shoulder to Elbow
         self.L2 = l2  # Elbow to Wrist
         self.D1 = d1  # Base to Shoulder height
-        self.L_TOOL = tool_length # Wrist center to tip
+        self.TOOL_OFFSET = np.array(tool_offset) # Wrist center to tip (vector)
+        self.L_TOOL = np.linalg.norm(self.TOOL_OFFSET)
         
         # Joint limits (degrees)
         self.limits = [(-90, 90)] * 5
@@ -35,16 +36,37 @@ class IK_Solver:
         theta0 = math.degrees(math.atan2(tz, tx))
         
         # 2. Wrist Center Calculation (Decoupling)
-        # For drawing, we usually want the gripper pointing straight down (-Y).
+        # We calculate the wrist position such that the TOOL_OFFSET (when rotated)
+        # ends up at the target_pos.
+        
+        # For CNC/Drawing, we assume the tool is pointing DOWN (-Y in IK space).
+        # This means J4 (pitch) compensates for J1 and J2.
+        # Simple Case: The tool is pointing straight down.
+        # If the tool has a lateral offset, it must be accounted for.
+        
         if target_up is None:
-            # Default: Pointing down (Y negative)
-            wrist_center = (tx, ty + self.L_TOOL, tz)
-        else:
-            ux, uy, uz = target_up
+            # Assume tool points DOWN (-Y). 
+            # If TOOL_OFFSET is (0, L, 0) in rest pose, and we point down,
+            # wrist is at target_pos + (0, L, 0).
+            # If TOOL_OFFSET has X/Z, we need to rotate it with J0.
+            
+            # Rotate TOOL_OFFSET by J0 (theta0)
+            rad0 = math.atan2(tz, tx)
+            c0, s0 = math.cos(rad0), math.sin(rad0)
+            
+            # Local offset rotated to match J0 orientation
+            # Assuming TOOL_OFFSET is in a local frame where Y is "along the arm" 
+            # and X/Z are lateral.
+            # Local offset rotated to match J0 orientation
+            # Standardize sign: we use the absolute L_TOOL magnitude for the vertical component 
+            # to ensure the wrist is ALWAYS above the drawing tip, immune to calibration sign errors.
+            off_x, _, off_z = self.TOOL_OFFSET
+            v_off_y = self.L_TOOL 
+            
             wrist_center = (
-                tx - ux * self.L_TOOL,
-                ty - uy * self.L_TOOL,
-                tz - uz * self.L_TOOL
+                tx - (off_x * c0 - off_z * s0),
+                ty + v_off_y, 
+                tz - (off_x * s0 + off_z * c0)
             )
             
         # 3. 2D Plane Geometry (J1, J2)
@@ -55,7 +77,21 @@ class IK_Solver:
         # Distance from Shoulder to Wrist Center
         D = math.sqrt(r**2 + y_rel**2)
         
-        if D > (self.L1 + self.L2) or D < abs(self.L1 - self.L2):
+        # Margen de tolerancia para evitar errores de precisión (2cm)
+        epsilon = 0.02
+        max_reach = self.L1 + self.L2
+        
+        if D > (max_reach + epsilon):
+            # PROYECCIÓN: El punto está fuera de alcance. 
+            # Re-escalamos el objetivo para que esté justo en el borde del alcance máximo.
+            scale = max_reach / D
+            r *= scale
+            y_rel *= scale
+            # Recalcular D para que sea exacto
+            D = math.sqrt(r**2 + y_rel**2)
+            # No retornamos None aquí, permitimos que el brazo se estire al máximo
+        elif D < (abs(self.L1 - self.L2) - epsilon):
+            # Demasiado cerca del hombro
             return None # Unreachable
             
         # Law of Cosines for J2 (Elbow)
@@ -90,7 +126,8 @@ class IK_Solver:
             low, high = self.limits[i]
             val = round(a, 2)
             if val < low or val > high:
-                return None  # Unreachable due to physical joint limits
+                print(f"  [IK DEBUG] Joint {i} out of range: {val} (Limits: {low} to {high})")
+                return None
             rounded_angles.append(val)
             
         return rounded_angles

@@ -45,13 +45,12 @@ class CNCMixin:
         cz = (min_z + max_z) / 2
         centered_verts = [(x - cx, 0, z - cz) for x, z in raw_verts]
         
-        w = max(max_x - min_x, 0.2)
-        d = max(max_z - min_z, 0.2)
+        w = max_x - min_x
+        d = max_z - min_z
         extent = max(w, d)
         
         # ── Paso 3: Crear entidad con mesh centrado y vertex colors ──
-        # La posición del Entity ES el centro del dibujo.
-        initial_colors = [color.rgba32(0, 200, 255, 180)] * len(centered_verts)  # Cyan por defecto
+        initial_colors = [color.rgba32(0, 200, 255, 180)] * len(centered_verts)
         self.svg_blueprint = Entity(
             parent=scene,
             model=Mesh(vertices=centered_verts, colors=initial_colors, mode='line', thickness=3),
@@ -59,7 +58,7 @@ class CNCMixin:
             always_on_top=True,
             unlit=True
         )
-        self.svg_blueprint.world_position = Vec3(1.85, 0.05, 0)
+        self.svg_blueprint.world_position = Vec3(1.4, 0.05, 0)
 
         self.svg_blueprint.raw_paths = raw_paths
         self.svg_blueprint.is_svg_blueprint = True
@@ -102,16 +101,16 @@ class CNCMixin:
             print("[CNC] Error: No hay SVG cargado.")
             self._send_cnc_status("error", "No hay SVG cargado")
             return
+            
+        if hasattr(self, 'recalibrate_tool'):
+            self.recalibrate_tool()
         
         bp = self.svg_blueprint
         raw_paths = bp.raw_paths
         
         # Offset usado para centrar el mesh
         cx, cz = getattr(bp, 'mesh_offset_raw', (0, 0))
-        scale_factor = self.svg_interpreter.scale  # 0.02 (px → mundo)
-        
-        # Transformación REAL de la entidad
-        entity_pos = bp.world_position
+        scale_factor = self.svg_interpreter.scale
         entity_scale = bp.world_scale
         entity_rot_y = bp.rotation_y
         
@@ -119,7 +118,7 @@ class CNCMixin:
         cos_r = math.cos(rad)
         sin_r = math.sin(rad)
         
-        print(f"[CNC] Blueprint transform: pos={entity_pos}, scale={entity_scale}, rot_y={entity_rot_y}")
+        print(f"[CNC] Blueprint transform: pos={bp.world_position}, scale={entity_scale}, rot_y={entity_rot_y}")
         print(f"[CNC] Mesh offset: cx={cx:.4f}, cz={cz:.4f}, svg_scale={scale_factor}")
         
         self.cnc_trajectory = []
@@ -128,23 +127,12 @@ class CNCMixin:
             for wp in path:
                 # 1. Coordenada local del mesh
                 local_x = wp['pos'][0] * scale_factor - cx
+                # Guardar coordenadas LOCALES (relativas al centro del mesh)
+                local_x = wp['pos'][0] * scale_factor - cx
                 local_z = wp['pos'][1] * scale_factor - cz
                 
-                # 2. Aplicar escala de la entidad
-                scaled_x = local_x * entity_scale.x
-                scaled_z = local_z * entity_scale.z
-                
-                # 3. Aplicar rotación Y (en plano XZ)
-                rot_x = scaled_x * cos_r - scaled_z * sin_r
-                rot_z = scaled_x * sin_r + scaled_z * cos_r
-                
-                # 4. Trasladar a posición del mundo
-                world_x = rot_x + entity_pos.x
-                world_z = rot_z + entity_pos.z
-                world_y = entity_pos.y  # Altura de dibujo = posición Y del blueprint
-                
                 self.cnc_trajectory.append({
-                    'pos': (world_x, world_y, world_z),
+                    'local_pos': (local_x, 0, local_z), # Y=0 en el plano del papel
                     'pen': wp['pen']
                 })
         
@@ -155,21 +143,50 @@ class CNCMixin:
         
         # Log primeros waypoints para verificación
         for i, wp in enumerate(self.cnc_trajectory[:3]):
-            print(f"  WP[{i}]: pos={wp['pos']}, pen={'DOWN' if wp['pen'] else 'UP'}")
-        
-        self.cnc_index = 0
-        self.cnc_active = True
+            print(f"  WP[{i}]: local_pos={wp['local_pos']}, pen={'DOWN' if wp['pen'] else 'UP'}")
         
         # Inicializar posición lógica del interpolador
-        first_wp = self.cnc_trajectory[0]
-        start_pos = Vec3(first_wp['pos'])
-        if not first_wp['pen']:
-            start_pos.y += self.cnc_safety_height
-        self.cnc_logical_pos = start_pos
+        self.cnc_index = 0
+        self.cnc_active = True
+        self._update_cnc_logical_pos() # Calcular primera posición mundial
+        print(f"[CNC] Trayectoria iniciada con seguimiento dinámico.")
         
         self._send_cnc_status("running")
         print(f"[CNC] Iniciando trayectoria con {len(self.cnc_trajectory)} puntos.")
 
+
+    def _update_cnc_logical_pos(self):
+        """Calcula la posición mundial del waypoint actual basada en el estado actual del blueprint."""
+        if self.cnc_index >= len(self.cnc_trajectory): return None
+        
+        bp = self.svg_blueprint
+        target = self.cnc_trajectory[self.cnc_index]
+        local_target = Vec3(target['local_pos'])
+        
+        # 1. Escala
+        world_target = Vec3(
+            local_target.x * bp.world_scale.x,
+            local_target.y * bp.world_scale.y,
+            local_target.z * bp.world_scale.z
+        )
+        
+        # 2. Rotación
+        rad = math.radians(-bp.rotation_y)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+        rx = world_target.x * cos_r - world_target.z * sin_r
+        rz = world_target.x * sin_r + world_target.z * cos_r
+        world_target.x = rx
+        world_target.z = rz
+        
+        # 3. Posición
+        world_target += bp.world_position
+        
+        # 4. Altura de seguridad
+        if not target['pen']:
+            world_target.y += self.cnc_safety_height
+            
+        return world_target
 
     def _update_cnc_execution(self):
         """Mueve el brazo suavemente hacia el waypoint actual usando interpolación por tiempo."""
@@ -180,12 +197,15 @@ class CNCMixin:
             if hasattr(self, 'cnc_logical_pos'): del self.cnc_logical_pos
             return
             
-        target = self.cnc_trajectory[self.cnc_index]
-        target_pos = Vec3(target['pos'])
-        pen_down = target['pen']
+        # Calcular posición mundial ACTUAL (por si el blueprint se movió)
+        target_pos = self._update_cnc_logical_pos()
+        if target_pos is None: return
         
-        if not pen_down:
-            target_pos.y += self.cnc_safety_height
+        pen_down = self.cnc_trajectory[self.cnc_index]['pen']
+        
+        # Actualizar colores cada pocos frames (feedback visual en tiempo real)
+        if self.cnc_index % 10 == 0:
+            self._update_blueprint_reachability()
 
         # ── Interpolación de posición (Feedrate constante) ──
         if not hasattr(self, 'cnc_logical_pos'):
@@ -205,11 +225,10 @@ class CNCMixin:
         else:
             # Avanzar proporcionalmente
             self.cnc_logical_pos += direction.normalized() * move_step
-        
         # ── Resolver IK y aplicar ──
-        # Ursina (Y-up) -> IK Solver (Z-up)
+        # Ursina (Y-up) -> IK Solver (X, Y, Z)
         local_target = self.cnc_logical_pos - self.robot_root.world_position
-        ik_coords = (local_target.x, local_target.z, local_target.y)
+        ik_coords = (local_target.x, local_target.y, local_target.z)
         angles = self.ik_solver.solve(ik_coords)
         
         if angles:
@@ -229,14 +248,13 @@ class CNCMixin:
             self._pen_was_down = pen_down
             self.sync_to_gui()
         else:
-            # Punto inalcanzable
-            print(f"[CNC] Punto inalcanzable en index {self.cnc_index}, saltando...")
-            self.cnc_index += 1
-            if self.cnc_index < len(self.cnc_trajectory):
-                next_wp = self.cnc_trajectory[self.cnc_index]
-                self.cnc_logical_pos = Vec3(next_wp['pos'])
-                if not next_wp['pen']:
-                    self.cnc_logical_pos.y += self.cnc_safety_height
+            # Punto inalcanzable (incluso proyectado) o error de límites
+            # NO saltamos el punto automáticamente, dejamos que el brazo lo intente alcanzar.
+            # Esto permite que el láser de depuración guíe al usuario.
+            if not getattr(self, '_ik_fail_logged', False):
+                print(f"[CNC] Punto {self.cnc_index} fuera de alcance. Esperando...")
+                self._ik_fail_logged = True
+            
             self._pen_was_down = False
             if hasattr(self, '_last_trace_pos'): del self._last_trace_pos
 
@@ -327,10 +345,15 @@ class CNCMixin:
             world_y = entity_pos.y
             
             # El IK asume base en Y=0. Ajustamos al offset de robot_root
-            # Ursina (Y-up) -> IK Solver (Z-up)
+            # Ursina (Y-up) -> IK Solver (X, Y, Z)
             local_target = Vec3(world_x, world_y, world_z) - self.robot_root.world_position
-            ik_coords = (local_target.x, local_target.z, local_target.y)
+            ik_coords = (local_target.x, local_target.y, local_target.z)
             result = self.ik_solver.solve(ik_coords)
+            
+            # Diagnóstico puntual del primer vértice
+            if v == verts[0]:
+                print(f"[REACH DEBUG] World: {Vec3(world_x, world_y, world_z)} | Local: {local_target} | Result: {result is not None}")
+                
             new_colors.append(col_ok if result else col_bad)
         
         bp.model.colors = new_colors
