@@ -3,6 +3,20 @@
 # Nombre del entorno virtual
 VENV_DIR="venv"
 
+# Verificar y extraer el modelo 3D si no existe
+MODEL_FILE="robot_arm_sha.glb"
+ZIP_FILE="robot_arm_sha.zip"
+
+if [ ! -f "$MODEL_FILE" ]; then
+    if [ -f "$ZIP_FILE" ]; then
+        echo "=== El archivo $MODEL_FILE no se encontró. Extrayendo desde $ZIP_FILE... ==="
+        python3 -c "import zipfile; zipfile.ZipFile('$ZIP_FILE', 'r').extractall('.')"
+    else
+        echo "=== ADVERTENCIA: No se encontró ni $MODEL_FILE ni $ZIP_FILE. La simulación podría fallar. ==="
+    fi
+fi
+
+
 echo "=== Configurando el entorno para el Seguimiento de Gestos ==="
 
 # Forzar X11 para mayor estabilidad en Linux con PySide + Ursina

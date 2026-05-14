@@ -39,22 +39,55 @@ class CommunicationMixin:
     # Angle transmission
     # ------------------------------------------------------------------
 
-    def send_angles(self):
-        """Send slider angles to both the 3-D simulation (UDP) and Arduino (Serial)."""
-        angles = [s.value() for s in self.sliders]
+    def send_to_sim(self, angles: list):
+        """Send angles to the 3-D simulation (UDP)."""
         msg = json.dumps({"type": "angles", "data": angles})
         self.sock.sendto(msg.encode(), self.target_addr)
 
+    def send_to_arduino(self, angles: list):
+        """Send angles to the physical Arduino (Serial)."""
         if self.ser and self.ser.is_open:
-            # Format: "ANG0,ANG1,ANG2,ANG3,ANG4,GRIPPER\n" (offset by +90 to map -90..90 → 0..180)
-            parts = [str(a + 90) for a in angles]
-            serial_msg = ",".join(parts) + ",0\n"
+            # Format: "ANG0,ANG1,ANG2,ANG3,ANG4,J5,GRIPPER\n"
+            # Map -90..90 to 0..180 for standard servos
+            parts = [str(int(a + 90)) for a in angles]
+            
+            # Check for gripper state (default 0 if not present)
+            gripper_val = "1" if getattr(self, "gripper_active", False) else "0"
+            serial_msg = ",".join(parts) + f",{gripper_val}\n"
             self.ser.write(serial_msg.encode())
 
+    def send_angles(self):
+        """Send current GUI slider angles to the simulation."""
+        angles = [s.value() for s in self.sliders]
+        self.send_to_sim(angles)
+        # Note: We no longer send to Arduino directly here. 
+        # The feedback loop in sync_from_sim will handle it.
+
     def send_camera_angles(self, angles: list):
-        """Send angles derived from camera tracking to the simulation."""
-        msg = json.dumps({"type": "angles", "data": angles})
+        """Send camera-derived angles to the simulation."""
+        self.send_to_sim(angles)
+
+    def toggle_gripper_state(self):
+        """Toggle the gripper state and update its text/style."""
+        self.gripper_active = self.btn_gripper.isChecked()
+        
+        # Determine the ratio (1.0 for open, 0.0 for closed)
+        ratio = 1.0 if self.gripper_active else 0.0
+        
+        # Update button text
+        if self.gripper_active:
+            self.btn_gripper.setText("CLOSE GRIPPER")
+        else:
+            self.btn_gripper.setText("OPEN GRIPPER")
+        
+        # 1. Send to Simulation (UDP)
+        msg = json.dumps({"type": "gripper", "data": ratio})
         self.sock.sendto(msg.encode(), self.target_addr)
+        
+        # 2. Update physical Robot (Hardware) via Arduino
+        # This will be picked up in the next sync or we can trigger it now
+        angles = [s.value() for s in self.sliders]
+        self.send_to_arduino(angles)
 
     def spawn_request(self):
         """Send a spawn request for an object to the simulation."""
@@ -101,21 +134,22 @@ class CommunicationMixin:
                 data, _ = self.recv_sock.recvfrom(4096)
                 msg = json.loads(data.decode())
                 if msg.get("type") == "sync_angles":
-                    # --- CRITICAL FIX: Flicker Prevention ---
-                    # Ignore simulation feedback if we are in the middle of a local 
-                    # animation interpolation or waiting for a path request to complete.
-                    # This prevents the simulation from "pulling back" sliders due to 
-                    # delayed UDP messages.
-                    is_animating = hasattr(self, 'interp_timer') and self.interp_timer.isActive()
-                    if is_animating or getattr(self, '_waiting_for_path', False):
-                        continue
-
+                    # --- CRITICAL: Authority Flow ---
+                    # The simulation has processed our request (collision, etc.)
+                    # and is telling us where the robot actually is.
+                    
                     angles = msg["data"]
+
+                    # 1. Update Sliders (feedback for user)
                     for i, angle in enumerate(angles):
                         if i < len(self.sliders):
                             self.sliders[i].blockSignals(True)
                             self.sliders[i].setValue(int(angle))
                             self.sliders[i].blockSignals(False)
+                    
+                    # 2. Update physical Robot
+                    # We always trust the simulation as the source of truth for the hardware.
+                    self.send_to_arduino(angles)
                 elif msg.get("type") == "path_result":
                     # Sim has computed a collision-safe path
                     waypoints = msg.get("waypoints", [])
@@ -168,8 +202,13 @@ class CommunicationMixin:
                 self.ser = serial.Serial(selected_port, 115200, timeout=0.1)
                 
                 # IMPORTANT: Many Arduinos reset when the serial port is opened.
-                # We need to wait for it to boot up before sending the handshake.
-                time.sleep(2.0)
+                # The current sketch performs a movement scan which takes ~2.4s.
+                # We wait 3 seconds to ensure it's in the loop() and listening.
+                self.set_conn_status("Waiting for Arduino boot...", "normal")
+                time.sleep(3.0)
+                
+                # Clear any startup garbage
+                self.ser.reset_input_buffer()
                 
                 # Handshake verification
                 if self.verify_arduino():
@@ -189,10 +228,14 @@ class CommunicationMixin:
                     
             except serial.SerialException as e:
                 self.ser = None
-                if "Device or resource busy" in str(e) or "Access is denied" in str(e):
+                error_str = str(e)
+                if "Permission denied" in error_str or "[Errno 13]" in error_str:
+                    self.set_conn_status("Error: Permission denied (dialout group needed)", "error")
+                    print("\n[FIX] Run this command and RESTART: sudo usermod -aG dialout $USER")
+                elif "Device or resource busy" in error_str or "Access is denied" in error_str:
                     self.set_conn_status("Error: Port busy", "error")
                 else:
-                    self.set_conn_status(f"Error: {str(e)}", "error")
+                    self.set_conn_status(f"Error: {error_str}", "error")
             except Exception as e:
                 self.ser = None
                 self.set_conn_status(f"Error: {str(e)}", "error")
@@ -266,7 +309,7 @@ class CommunicationMixin:
                 with open("config.json", "r") as f:
                     config = json.load(f)
 
-                angles = config.get("joint_angles", [0, 0, 0, 0, 0, 0])
+                angles = config.get("joint_angles", [0, 0, 0, 0, 0])
                 # Padding para configs antiguas con menos de 5 ángulos
                 while len(angles) < len(self.sliders):
                     angles.append(0)
@@ -356,7 +399,7 @@ class CommunicationMixin:
         self.target_angles = wp["angles"]
         duration = max(wp["duration"], 0.05)
 
-        fps = 30
+        fps = 50
         self.interp_steps = max(1, int(duration * fps))
         self.interp_count = 0
 

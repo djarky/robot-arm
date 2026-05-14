@@ -70,8 +70,8 @@ class LayoutMixin:
         joint_group = QGroupBox("Manual Control")
         joint_layout = QFormLayout()
         self.sliders = []
-        joint_labels = ["J0", "J1", "J2", "J3", "J4", "J5"]
-        for i in range(6):
+        joint_labels = ["J0", "J1", "J2", "J3", "J4"]
+        for i in range(5):
             s = QSlider(Qt.Horizontal)
             s.setRange(-90, 90)
             s.setValue(0)
@@ -86,6 +86,26 @@ class LayoutMixin:
         )
         self.collision_indicator.setToolTip("Sin colisión")
         joint_layout.addRow("Colisión:", self.collision_indicator)
+
+        # Gripper Toggle - Moved here for better visibility
+        self.btn_gripper = QPushButton("OPEN GRIPPER")
+        self.btn_gripper.setCheckable(True)
+        self.btn_gripper.setFixedHeight(35)
+        self.btn_gripper.setStyleSheet("""
+            QPushButton { 
+                background-color: #333; 
+                border: 1px solid #555; 
+                border-radius: 5px;
+                color: #ccc;
+            }
+            QPushButton:checked { 
+                background-color: #f57c00; 
+                color: white; 
+                font-weight: bold; 
+            }
+        """)
+        self.btn_gripper.clicked.connect(self.toggle_gripper_state)
+        joint_layout.addRow("Gripper:", self.btn_gripper)
 
         joint_group.setLayout(joint_layout)
         self.right_layout.addWidget(joint_group)
@@ -139,6 +159,8 @@ class LayoutMixin:
 
         self.btn_connect = QPushButton("Connect Arduino")
         self.btn_connect.clicked.connect(self.toggle_serial)
+        self.conn_status = QLabel("Status: Disconnected")
+        
         self.conn_status = QLabel("Status: Disconnected")
         
         self.packet_status = QLabel("RX: --")
