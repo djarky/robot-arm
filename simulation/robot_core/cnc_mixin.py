@@ -125,9 +125,7 @@ class CNCMixin:
         
         for path in raw_paths:
             for wp in path:
-                # 1. Coordenada local del mesh
-                local_x = wp['pos'][0] * scale_factor - cx
-                # Guardar coordenadas LOCALES (relativas al centro del mesh)
+                # Coordenada local del mesh (relativa al centro)
                 local_x = wp['pos'][0] * scale_factor - cx
                 local_z = wp['pos'][1] * scale_factor - cz
                 
@@ -203,10 +201,6 @@ class CNCMixin:
         
         pen_down = self.cnc_trajectory[self.cnc_index]['pen']
         
-        # Actualizar colores cada pocos frames (feedback visual en tiempo real)
-        if self.cnc_index % 10 == 0:
-            self._update_blueprint_reachability()
-
         # ── Interpolación de posición (Feedrate constante) ──
         if not hasattr(self, 'cnc_logical_pos'):
             self.cnc_logical_pos = Vec3(target_pos)
@@ -232,7 +226,7 @@ class CNCMixin:
         angles = self.ik_solver.solve(ik_coords)
         
         if angles:
-            self._apply_angles_batched(angles)
+            self._apply_angles_batched(angles, force=True)
             
             # ── Actualizar rastro visual (solo si el pen está abajo) ──
             if pen_down:
@@ -312,11 +306,30 @@ class CNCMixin:
         print("[CNC] Rastro visual reiniciado.")
 
     def _update_blueprint_reachability(self):
-        """Colorea cada segmento de línea del SVG según alcanzabilidad del IK.
-        Verde = alcanzable, Rojo = fuera de rango."""
+        """Trazado virtual: el brazo INTENTA alcanzar cada punto del SVG.
+        
+        Para cada vértice del mesh:
+        1. Calcula coordenadas mundo del vértice
+        2. Resuelve IK para obtener ángulos
+        3. Aplica los ángulos al esqueleto temporalmente
+        4. Lee la posición REAL del nodo CNC
+        5. Mide la distancia entre el CNC tip y el objetivo
+        6. Colorea según si pudo o no tocar el punto
+        
+        Verde = CNC tip tocó el punto (<0.3 unidades)
+        Amarillo = cerca pero no exacto (<1.0 unidades)
+        Rojo = no pudo alcanzar
+        """
         bp = self.svg_blueprint
         if not bp or not bp.model or not bp.model.vertices:
             return
+        
+        # Verificar que tenemos el nodo CNC para medir
+        if not hasattr(self, 'cnc_node') or self.cnc_node.isEmpty():
+            return
+        
+        # Guardar ángulos actuales para restaurar después
+        saved_angles = list(self.angles)
         
         entity_pos = bp.world_position
         entity_scale = bp.world_scale
@@ -329,32 +342,83 @@ class CNCMixin:
         verts = bp.model.vertices
         new_colors = []
         
-        col_ok = color.rgba32(0, 255, 100, 220)    # Verde brillante
-        col_bad = color.rgba32(255, 40, 40, 240)    # Rojo brillante
+        col_ok = color.rgba32(0, 255, 100, 220)      # Verde — alcanzado
+        col_marginal = color.rgba32(255, 200, 0, 220) # Amarillo — cerca
+        col_bad = color.rgba32(255, 40, 40, 240)      # Rojo — inalcanzable
         
-        for v in verts:
-            # v es (local_x, 0, local_z) en espacio local del mesh
+        robot_pos = self.robot_root.world_position
+        reach_ok = 0.05    # Distancia para "tocado" (match láser)
+        reach_warn = 0.5   # Distancia para "cerca"
+        
+        # Para rendimiento, muestrear cada N vértices y aplicar color a pares
+        # (el mesh usa mode='line', vértices vienen en pares: inicio, fin de segmento)
+        sample_step = 2  # Evaluar cada par de vértices
+        cached_results = []  # (color_for_this_vertex,)
+        
+        for vi in range(0, len(verts), sample_step):
+            v = verts[vi]
+            
+            # 1. Transformar vértice local → mundo
             scaled_x = v[0] * entity_scale.x
             scaled_z = v[2] * entity_scale.z
             
-            rot_x = scaled_x * cos_r - scaled_z * sin_r
-            rot_z = scaled_x * sin_r + scaled_z * cos_r
+            rx = scaled_x * cos_r - scaled_z * sin_r
+            rz = scaled_x * sin_r + scaled_z * cos_r
             
-            world_x = rot_x + entity_pos.x
-            world_z = rot_z + entity_pos.z
-            world_y = entity_pos.y
+            target = Vec3(
+                rx + entity_pos.x,
+                entity_pos.y,
+                rz + entity_pos.z
+            )
             
-            # El IK asume base en Y=0. Ajustamos al offset de robot_root
-            # Ursina (Y-up) -> IK Solver (X, Y, Z)
-            local_target = Vec3(world_x, world_y, world_z) - self.robot_root.world_position
+            # 2. Resolver IK
+            local_target = target - robot_pos
             ik_coords = (local_target.x, local_target.y, local_target.z)
-            result = self.ik_solver.solve(ik_coords)
+            angles = self.ik_solver.solve(ik_coords)
             
-            # Diagnóstico puntual del primer vértice
-            if v == verts[0]:
-                print(f"[REACH DEBUG] World: {Vec3(world_x, world_y, world_z)} | Local: {local_target} | Result: {result is not None}")
+            if angles:
+                # 3. Aplicar ángulos temporalmente
+                for i, a in enumerate(angles):
+                    if i < self.NUM_JOINTS:
+                        self._apply_angle_raw(i, a)
                 
-            new_colors.append(col_ok if result else col_bad)
+                # 4. Forzar actualización del esqueleto y leer posición real del CNC
+                try:
+                    self.actor.getPartBundle('modelRoot').forceUpdate()
+                    tip_pos = Vec3(self.cnc_node.getPos(base.render))
+                    
+                    # 5. Medir distancia real
+                    dist = (tip_pos - target).length()
+                    
+                    if dist < reach_ok:
+                        c = col_ok
+                    elif dist < reach_warn:
+                        c = col_marginal
+                    else:
+                        c = col_bad
+                except Exception:
+                    c = col_bad
+            else:
+                # IK no encontró solución
+                c = col_bad
+            
+            # Aplicar el mismo color al par de vértices del segmento
+            for j in range(sample_step):
+                if vi + j < len(verts):
+                    cached_results.append(c)
         
-        bp.model.colors = new_colors
+        # Rellenar si quedaron vértices sin color
+        while len(cached_results) < len(verts):
+            cached_results.append(col_bad)
+        
+        # 6. Restaurar ángulos originales
+        for i, a in enumerate(saved_angles):
+            if i < self.NUM_JOINTS:
+                self._apply_angle_raw(i, a)
+        try:
+            self.actor.getPartBundle('modelRoot').forceUpdate()
+        except Exception:
+            pass
+        
+        bp.model.colors = cached_results[:len(verts)]
         bp.model.generate()

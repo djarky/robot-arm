@@ -31,10 +31,14 @@ fi
 # Activar el entorno virtual
 source "$VENV_DIR/bin/activate"
 
-# Instalar o actualizar dependencias
-echo "Instalando dependencias (opencv, mediapipe, pyside6, ursina, pyserial)..."
+# Instalar o actualizar dependencias base
+echo "Instalando dependencias base (opencv, mediapipe, pyside6, ursina, pyserial, pygame-ce, requests)..."
 pip install --upgrade pip
-pip install opencv-python mediapipe PySide6 ursina pyserial
+pip install opencv-python mediapipe PySide6 ursina pyserial pygame-ce requests
+
+# Intentar instalar dependencias opcionales de mandos (Evdev, SDL2)
+echo "Intentando instalar drivers opcionales (evdev, pysdl2)..."
+pip install evdev pysdl2 pysdl2-dll || echo "AVISO: No se pudieron instalar algunos drivers opcionales. El sistema usará backends estándar."
 
 # Ejecutar la aplicación principal (GUI)
 echo "Iniciando la aplicación GUI..."

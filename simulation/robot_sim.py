@@ -124,12 +124,13 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         if not self.cnc_node.isEmpty() and not j4_bone.isEmpty():
             # Obtener vector 3D J4 -> CNC
             offset_vec = self.cnc_node.getPos(j4_bone)
-            # Panda3D (X, Y, Z) -> IK Solver (X, Y, Z) 
-            # Panda: X=lateral, Y=adelante, Z=arriba
-            # IK_Solver: X=adelante, Y=arriba, Z=lateral
-            self.ik_solver.TOOL_OFFSET = np.array([offset_vec.y, offset_vec.z, offset_vec.x])
+            # Panda3D (X, Y, Z) -> Ursina/IK (X, Y, Z) 
+            # Panda3D: X=lateral, Y=forward, Z=up
+            # Ursina/IK: X=lateral, Y=up, Z=forward
+            # Mapping: IK.x = Panda.x, IK.y = Panda.z, IK.z = Panda.y
+            self.ik_solver.TOOL_OFFSET = np.array([offset_vec.x, offset_vec.z, offset_vec.y])
             self.ik_solver.L_TOOL = np.linalg.norm(self.ik_solver.TOOL_OFFSET)
-            print(f"[IK] Herramienta Calibrada (J4→CNC): Offset={self.ik_solver.TOOL_OFFSET}, L={self.ik_solver.L_TOOL:.4f}")
+            print(f"[IK] Herramienta Calibrada (J4→CNC): Panda3D_raw=({offset_vec.x:.4f}, {offset_vec.y:.4f}, {offset_vec.z:.4f}) -> IK_Offset={self.ik_solver.TOOL_OFFSET}, L={self.ik_solver.L_TOOL:.4f}")
         
         # --- Configurar Actores de la Garra (Animación) ---
         self._setup_gripper_actors(model_path)
@@ -229,10 +230,10 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
             return
             
         offset_vec = self.cnc_node.getPos(j4_bone)
-        # Panda3D (X, Y, Z) -> IK Solver (X, Y, Z)
-        # Panda: X=lateral, Y=adelante, Z=arriba
-        # IK_Solver: X=adelante, Y=arriba, Z=lateral
-        self.ik_solver.TOOL_OFFSET = np.array([offset_vec.y, offset_vec.z, offset_vec.x])
+        # Panda3D (X, Y, Z) -> Ursina/IK (X, Y, Z)
+        # Panda3D: X=lateral, Y=forward, Z=up
+        # Ursina/IK: X=lateral, Y=up, Z=forward
+        self.ik_solver.TOOL_OFFSET = np.array([offset_vec.x, offset_vec.z, offset_vec.y])
         self.ik_solver.L_TOOL = np.linalg.norm(self.ik_solver.TOOL_OFFSET)
         print(f"[IK] Re-calibración: Offset={self.ik_solver.TOOL_OFFSET}, L={self.ik_solver.L_TOOL:.4f}")
 
@@ -310,7 +311,7 @@ class RobotArmSim(CameraMixin, SpawnMixin, CNCMixin, ArmControlMixin, NetworkMix
         if (not self.cnc_active and self.svg_blueprint and self.gizmo.target == self.svg_blueprint):
             if not hasattr(self, '_reach_timer'): self._reach_timer = 0
             self._reach_timer += time.dt
-            if self._reach_timer >= 0.2:
+            if self._reach_timer >= 1.0:  # Virtual trace is heavier, run less frequently
                 self._reach_timer = 0
                 self._update_blueprint_reachability()
 

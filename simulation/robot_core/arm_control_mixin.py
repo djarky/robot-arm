@@ -7,10 +7,15 @@ import os
 class ArmControlMixin:
     """Mixin for arm angles and colliders."""
     
+    # Per-joint angle limits: J4 (wrist pitch) needs wider range
+    # because it compensates J1+J2 to keep the tool pointing down.
+    JOINT_LIMITS = [(-90, 90), (-90, 90), (-90, 90), (-90, 90), (-180, 180)]
+
     def _apply_angle_raw(self, joint_index, angle_deg):
         """Apply angle WITHOUT collision check.  Used internally by
         the collision system for tentative testing."""
-        clamped = max(-90, min(90, angle_deg))
+        lo, hi = self.JOINT_LIMITS[joint_index] if joint_index < len(self.JOINT_LIMITS) else (-90, 90)
+        clamped = max(lo, min(hi, angle_deg))
         self.angles[joint_index] = clamped
         jname = self.JOINT_NAMES[joint_index]
         ctrl = self.joint_controls.get(jname)

@@ -26,10 +26,15 @@ if not exist %VENV_DIR% (
 :: Activar el entorno virtual
 call %VENV_DIR%\Scripts\activate
 
-:: Instalar o actualizar dependencias
-echo Instalando dependencias (opencv, mediapipe, pyside6, ursina, pyserial)...
+:: Instalar o actualizar dependencias base
+echo Instalando dependencias base (opencv, mediapipe, pyside6, ursina, pyserial, pygame-ce, requests)...
 python -m pip install --upgrade pip
-pip install opencv-python mediapipe PySide6 ursina pyserial
+pip install opencv-python mediapipe PySide6 ursina pyserial pygame-ce requests
+
+:: Intentar instalar dependencias opcionales de mandos (SDL2)
+:: evdev se omite en Windows ya que es exclusivo de Linux
+echo Intentando instalar drivers opcionales (pysdl2)...
+pip install pysdl2 pysdl2-dll || echo AVISO: No se pudieron instalar algunos drivers opcionales. El sistema usará backends estándar.
 
 :: Ejecutar la aplicación principal (GUI)
 echo Iniciando la aplicación GUI...
