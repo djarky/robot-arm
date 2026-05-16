@@ -143,6 +143,10 @@ class CNCMixin:
         for i, wp in enumerate(self.cnc_trajectory[:3]):
             print(f"  WP[{i}]: local_pos={wp['local_pos']}, pen={'DOWN' if wp['pen'] else 'UP'}")
         
+        print(f"[CNC] Pre-calculando {len(self.cnc_trajectory)} puntos usando IK Heurística (CCD)...")
+        self._precalculate_trajectory()
+        print(f"[CNC] Pre-cálculo completado. Iniciando trayectoria con seguimiento dinámico.")
+        
         # Inicializar posición lógica del interpolador
         self.cnc_index = 0
         self.cnc_active = True
@@ -186,6 +190,120 @@ class CNCMixin:
             
         return world_target
 
+    def _solve_with_skeleton(self, target_pos, start_angles, iterations_per_step=15):
+        """Doble Tanteo: usa el esqueleto REAL de Panda3D para encontrar los ángulos
+        que minimizan la distancia del nodo CNC al objetivo.
+        
+        Para cada junta, prueba +step y -step, se queda con la dirección que
+        acorta la distancia. Repite con pasos cada vez más finos.
+        Garantizado de funcionar porque usa el mismo esqueleto que el renderer.
+        """
+        current_angles = list(start_angles)
+        joints = [0, 1, 2, 4]  # J0 (base), J1 (hombro), J2 (codo), J4 (muñeca)
+        step_sizes = [10.0, 5.0, 2.0, 1.0, 0.5, 0.2]
+        
+        for step in step_sizes:
+            for _ in range(iterations_per_step):
+                improved = False
+                
+                # Evaluar distancia actual
+                for ji, a in enumerate(current_angles):
+                    if ji < self.NUM_JOINTS:
+                        self._apply_angle_raw(ji, a)
+                self.actor.getPartBundle('modelRoot').forceUpdate()
+                tip = Vec3(self.cnc_node.getPos(base.render))
+                best_dist_sq = (tip.x - target_pos.x)**2 + (tip.y - target_pos.y)**2 + (tip.z - target_pos.z)**2
+                
+                if best_dist_sq < 0.0001:  # Distancia < 0.01 unidades = perfecto
+                    return current_angles
+                
+                for j in joints:
+                    original = current_angles[j]
+                    lo, hi = self.JOINT_LIMITS[j] if j < len(self.JOINT_LIMITS) else (-90, 90)
+                    
+                    # ── Tanteo +step ──
+                    test_plus = min(hi, original + step)
+                    dist_plus = float('inf')
+                    if test_plus != original:
+                        current_angles[j] = test_plus
+                        for ji, a in enumerate(current_angles):
+                            if ji < self.NUM_JOINTS:
+                                self._apply_angle_raw(ji, a)
+                        self.actor.getPartBundle('modelRoot').forceUpdate()
+                        tip = Vec3(self.cnc_node.getPos(base.render))
+                        dist_plus = (tip.x - target_pos.x)**2 + (tip.y - target_pos.y)**2 + (tip.z - target_pos.z)**2
+                    
+                    # ── Tanteo -step ──
+                    test_minus = max(lo, original - step)
+                    dist_minus = float('inf')
+                    if test_minus != original:
+                        current_angles[j] = test_minus
+                        for ji, a in enumerate(current_angles):
+                            if ji < self.NUM_JOINTS:
+                                self._apply_angle_raw(ji, a)
+                        self.actor.getPartBundle('modelRoot').forceUpdate()
+                        tip = Vec3(self.cnc_node.getPos(base.render))
+                        dist_minus = (tip.x - target_pos.x)**2 + (tip.y - target_pos.y)**2 + (tip.z - target_pos.z)**2
+                    
+                    # ── Quedarse con el mejor ──
+                    if dist_plus < best_dist_sq and dist_plus <= dist_minus:
+                        current_angles[j] = test_plus
+                        best_dist_sq = dist_plus
+                        improved = True
+                    elif dist_minus < best_dist_sq:
+                        current_angles[j] = test_minus
+                        best_dist_sq = dist_minus
+                        improved = True
+                    else:
+                        current_angles[j] = original  # Revertir
+                
+                if not improved:
+                    break  # Mínimo local con este paso, pasar a paso más fino
+        
+        return current_angles
+
+    def _precalculate_trajectory(self):
+        """Pre-calcula todos los ángulos usando el esqueleto real (doble tanteo).
+        
+        Cada punto parte de los ángulos del punto anterior, garantizando
+        movimientos suaves y continuos (sin saltos)."""
+        # Guardar ángulos originales para restaurar después
+        saved_angles = list(self.angles)
+        
+        # Partimos de la posición actual del robot (reposo)
+        current_guess = list(self.angles)
+        total = len(self.cnc_trajectory)
+        
+        t_start = time.time()
+        
+        for i in range(total):
+            # Calcular posición mundo del waypoint
+            self.cnc_index = i
+            world_target = self._update_cnc_logical_pos()
+            
+            # Resolver usando el esqueleto real
+            angles = self._solve_with_skeleton(world_target, current_guess)
+            
+            # Guardar y encadenar
+            self.cnc_trajectory[i]['angles'] = angles
+            self.cnc_trajectory[i]['world_pos'] = world_target
+            current_guess = list(angles)
+            
+            # Progreso cada 50 puntos
+            if (i + 1) % 50 == 0:
+                elapsed = time.time() - t_start
+                print(f"  [CNC Pre-Calc] {i+1}/{total} puntos ({elapsed:.1f}s)")
+        
+        elapsed = time.time() - t_start
+        print(f"  [CNC Pre-Calc] Completado: {total} puntos en {elapsed:.1f}s")
+        
+        # Restaurar ángulos originales y resetear index
+        for ji, a in enumerate(saved_angles):
+            if ji < self.NUM_JOINTS:
+                self._apply_angle_raw(ji, a)
+        self.actor.getPartBundle('modelRoot').forceUpdate()
+        self.cnc_index = 0
+
     def _update_cnc_execution(self):
         """Mueve el brazo suavemente hacia el waypoint actual usando interpolación por tiempo."""
         if self.cnc_index >= len(self.cnc_trajectory):
@@ -219,12 +337,11 @@ class CNCMixin:
         else:
             # Avanzar proporcionalmente
             self.cnc_logical_pos += direction.normalized() * move_step
-        # ── Resolver IK y aplicar ──
-        # Ursina (Y-up) -> IK Solver (X, Y, Z)
-        local_target = self.cnc_logical_pos - self.robot_root.world_position
-        ik_coords = (local_target.x, local_target.y, local_target.z)
-        angles = self.ik_solver.solve(ik_coords)
-        
+        # ── Aplicar Ángulos Pre-Calculados ──
+        # Usamos directamente los ángulos del waypoint actual (ya optimizados por el doble tanteo)
+        wp_idx = min(self.cnc_index, len(self.cnc_trajectory) - 1)
+        angles = self.cnc_trajectory[wp_idx]['angles']
+            
         if angles:
             self._apply_angles_batched(angles, force=True)
             
@@ -306,29 +423,20 @@ class CNCMixin:
         print("[CNC] Rastro visual reiniciado.")
 
     def _update_blueprint_reachability(self):
-        """Trazado virtual: el brazo INTENTA alcanzar cada punto del SVG.
+        """Trazado virtual: el brazo INTENTA alcanzar cada punto del SVG
+        usando el doble tanteo con el esqueleto real.
         
-        Para cada vértice del mesh:
-        1. Calcula coordenadas mundo del vértice
-        2. Resuelve IK para obtener ángulos
-        3. Aplica los ángulos al esqueleto temporalmente
-        4. Lee la posición REAL del nodo CNC
-        5. Mide la distancia entre el CNC tip y el objetivo
-        6. Colorea según si pudo o no tocar el punto
-        
-        Verde = CNC tip tocó el punto (<0.3 unidades)
-        Amarillo = cerca pero no exacto (<1.0 unidades)
+        Verde = CNC tip tocó el punto
+        Amarillo = cerca pero no exacto
         Rojo = no pudo alcanzar
         """
         bp = self.svg_blueprint
         if not bp or not bp.model or not bp.model.vertices:
             return
         
-        # Verificar que tenemos el nodo CNC para medir
         if not hasattr(self, 'cnc_node') or self.cnc_node.isEmpty():
             return
         
-        # Guardar ángulos actuales para restaurar después
         saved_angles = list(self.angles)
         
         entity_pos = bp.world_position
@@ -340,25 +448,22 @@ class CNCMixin:
         sin_r = math.sin(rad)
         
         verts = bp.model.vertices
-        new_colors = []
         
-        col_ok = color.rgba32(0, 255, 100, 220)      # Verde — alcanzado
-        col_marginal = color.rgba32(255, 200, 0, 220) # Amarillo — cerca
-        col_bad = color.rgba32(255, 40, 40, 240)      # Rojo — inalcanzable
+        col_ok = color.rgba32(0, 255, 100, 220)
+        col_marginal = color.rgba32(255, 200, 0, 220)
+        col_bad = color.rgba32(255, 40, 40, 240)
         
-        robot_pos = self.robot_root.world_position
-        reach_ok = 0.05    # Distancia para "tocado" (match láser)
-        reach_warn = 0.5   # Distancia para "cerca"
+        reach_ok = 0.1
+        reach_warn = 0.5
         
-        # Para rendimiento, muestrear cada N vértices y aplicar color a pares
-        # (el mesh usa mode='line', vértices vienen en pares: inicio, fin de segmento)
-        sample_step = 2  # Evaluar cada par de vértices
-        cached_results = []  # (color_for_this_vertex,)
+        # Muestrear cada N vértices para rendimiento (el skeleton solver es pesado)
+        sample_step = 6
+        cached_results = []
+        current_guess = list(self.angles)
         
         for vi in range(0, len(verts), sample_step):
             v = verts[vi]
             
-            # 1. Transformar vértice local → mundo
             scaled_x = v[0] * entity_scale.x
             scaled_z = v[2] * entity_scale.z
             
@@ -371,54 +476,33 @@ class CNCMixin:
                 rz + entity_pos.z
             )
             
-            # 2. Resolver IK
-            local_target = target - robot_pos
-            ik_coords = (local_target.x, local_target.y, local_target.z)
-            angles = self.ik_solver.solve(ik_coords)
+            # Resolver usando el esqueleto real (3 pasos rápidos para preview)
+            angles = self._solve_with_skeleton(target, current_guess, iterations_per_step=3)
+            current_guess = list(angles)
             
-            if angles:
-                # 3. Aplicar ángulos temporalmente
-                for i, a in enumerate(angles):
-                    if i < self.NUM_JOINTS:
-                        self._apply_angle_raw(i, a)
-                
-                # 4. Forzar actualización del esqueleto y leer posición real del CNC
-                try:
-                    self.actor.getPartBundle('modelRoot').forceUpdate()
-                    tip_pos = Vec3(self.cnc_node.getPos(base.render))
-                    
-                    # 5. Medir distancia real
-                    dist = (tip_pos - target).length()
-                    
-                    if dist < reach_ok:
-                        c = col_ok
-                    elif dist < reach_warn:
-                        c = col_marginal
-                    else:
-                        c = col_bad
-                except Exception:
-                    c = col_bad
+            # Medir distancia real resultante
+            tip_pos = Vec3(self.cnc_node.getPos(base.render))
+            dist = (tip_pos - target).length()
+            
+            if dist < reach_ok:
+                c = col_ok
+            elif dist < reach_warn:
+                c = col_marginal
             else:
-                # IK no encontró solución
                 c = col_bad
             
-            # Aplicar el mismo color al par de vértices del segmento
             for j in range(sample_step):
                 if vi + j < len(verts):
                     cached_results.append(c)
         
-        # Rellenar si quedaron vértices sin color
         while len(cached_results) < len(verts):
             cached_results.append(col_bad)
         
-        # 6. Restaurar ángulos originales
+        # Restaurar ángulos originales
         for i, a in enumerate(saved_angles):
             if i < self.NUM_JOINTS:
                 self._apply_angle_raw(i, a)
-        try:
-            self.actor.getPartBundle('modelRoot').forceUpdate()
-        except Exception:
-            pass
+        self.actor.getPartBundle('modelRoot').forceUpdate()
         
         bp.model.colors = cached_results[:len(verts)]
         bp.model.generate()

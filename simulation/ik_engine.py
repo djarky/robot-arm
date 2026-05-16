@@ -151,7 +151,110 @@ class IK_Solver:
                 print(f"  [IK VERBOSE] CLAMPED: Joint {i} from {val}° to {clamped_val}° (Limits: {low} to {high})")
             rounded_angles.append(clamped_val)
             
-        return rounded_angles
+    def forward_kinematics(self, angles):
+        """
+        Pure math Forward Kinematics for ultra-fast heuristic evaluation.
+        Returns the (x, y, z) position of the CNC tip given joint angles.
+        """
+        j0, j1, j2, _, j4 = angles
+        
+        # 1. Angles in radians
+        rad0 = math.radians(-j0) # Yaw (inverted according to IK logic)
+        rad1 = math.radians(j1)
+        rad12 = math.radians(j1 + j2)
+        rad124 = math.radians(j1 + j2 + j4)
+        
+        # 2. 2D Radial Plane (r, y)
+        # Shoulder at (0, D1)
+        r_elbow = self.L1 * math.cos(rad1)
+        y_elbow = self.D1 + self.L1 * math.sin(rad1)
+        
+        r_wrist = r_elbow + self.L2 * math.cos(rad12)
+        y_wrist = y_elbow + self.L2 * math.sin(rad12)
+        
+        # Tool is L_TOOL along the J4 direction
+        r_tip = r_wrist + self.L_TOOL * math.cos(rad124)
+        y_tip = y_wrist + self.L_TOOL * math.sin(rad124)
+        
+        # 3. 3D World coordinates (yaw applied)
+        c0 = math.cos(rad0)
+        s0 = math.sin(rad0)
+        
+        # Base position from radial
+        x_base = r_tip * c0
+        z_base = r_tip * s0
+        
+        # Apply lateral offset (rotated by yaw)
+        off_x, _, off_z = self.TOOL_OFFSET
+        x_final = x_base + (off_x * c0 - off_z * s0)
+        z_final = z_base + (off_x * s0 + off_z * c0)
+        
+        return (x_final, y_tip, z_final)
+
+    def solve_heuristic(self, target_pos, start_angles, max_iters=50, tolerance=0.01):
+        """
+        Cyclic Coordinate Descent / Gradient Descent IK.
+        Iteratively adjusts start_angles to reach target_pos to avoid singularities.
+        """
+        current_angles = list(start_angles)
+        tx, ty, tz = target_pos
+        
+        # Joints to optimize: J0, J1, J2, J4 (indices 0, 1, 2, 4)
+        joints = [0, 1, 2, 4]
+        
+        # Step sizes (degrees) - start large for speed, reduce for precision
+        step_sizes = [5.0, 1.0, 0.2]
+        
+        for step in step_sizes:
+            for _ in range(max_iters):
+                improved = False
+                
+                # Current distance
+                fx, fy, fz = self.forward_kinematics(current_angles)
+                best_dist = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                
+                if best_dist < tolerance**2:
+                    return current_angles # Reached target!
+                
+                for j in joints:
+                    original_val = current_angles[j]
+                    low, high = self.limits[j]
+                    
+                    # Try + step
+                    test_plus = min(high, original_val + step)
+                    if test_plus != original_val:
+                        current_angles[j] = test_plus
+                        fx, fy, fz = self.forward_kinematics(current_angles)
+                        dist_plus = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                    else:
+                        dist_plus = float('inf')
+                        
+                    # Try - step
+                    test_minus = max(low, original_val - step)
+                    if test_minus != original_val:
+                        current_angles[j] = test_minus
+                        fx, fy, fz = self.forward_kinematics(current_angles)
+                        dist_minus = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                    else:
+                        dist_minus = float('inf')
+                    
+                    # Keep the best
+                    if dist_plus < best_dist and dist_plus <= dist_minus:
+                        best_dist = dist_plus
+                        current_angles[j] = test_plus
+                        improved = True
+                    elif dist_minus < best_dist:
+                        best_dist = dist_minus
+                        current_angles[j] = test_minus
+                        improved = True
+                    else:
+                        # Revert
+                        current_angles[j] = original_val
+                
+                if not improved:
+                    break # Local minimum for this step size, move to finer step
+                    
+        return current_angles
 
 # Test if executed directly
 if __name__ == "__main__":
