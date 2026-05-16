@@ -337,10 +337,28 @@ class CNCMixin:
         else:
             # Avanzar proporcionalmente
             self.cnc_logical_pos += direction.normalized() * move_step
-        # ── Aplicar Ángulos Pre-Calculados ──
-        # Usamos directamente los ángulos del waypoint actual (ya optimizados por el doble tanteo)
+        # ── Interpolar Ángulos Pre-Calculados (movimiento fluido) ──
         wp_idx = min(self.cnc_index, len(self.cnc_trajectory) - 1)
-        angles = self.cnc_trajectory[wp_idx]['angles']
+        
+        if wp_idx == 0:
+            # Primer waypoint: usar ángulos directamente
+            angles = self.cnc_trajectory[0]['angles']
+        else:
+            # Interpolar entre el waypoint anterior y el actual
+            prev_pos = self.cnc_trajectory[wp_idx - 1]['world_pos']
+            curr_pos = self.cnc_trajectory[wp_idx]['world_pos']
+            
+            seg_len = (curr_pos - prev_pos).length()
+            if seg_len < 0.0001:
+                t = 1.0
+            else:
+                # Distancia recorrida desde el waypoint anterior
+                traveled = (self.cnc_logical_pos - prev_pos).length()
+                t = max(0.0, min(1.0, traveled / seg_len))
+            
+            angles_A = self.cnc_trajectory[wp_idx - 1]['angles']
+            angles_B = self.cnc_trajectory[wp_idx]['angles']
+            angles = [a + (b - a) * t for a, b in zip(angles_A, angles_B)]
             
         if angles:
             self._apply_angles_batched(angles, force=True)
