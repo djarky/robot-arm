@@ -1,0 +1,130 @@
+name: Create Release from Latest Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.0.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # -------------------------------------------------
+      # 1. Find latest artifacts
+      # -------------------------------------------------
+      - name: Get latest artifacts
+        id: artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner,
+                repo,
+                per_page: 100
+              }
+            );
+
+            // Ignore expired artifacts
+            const validArtifacts = artifacts.filter(a => !a.expired);
+
+            const linux = validArtifacts
+              .filter(a => a.name === "linux-64bit")
+              .sort((a, b) =>
+                new Date(b.created_at) - new Date(a.created_at)
+              )[0];
+
+            const windows = validArtifacts
+              .filter(a => a.name === "windows-64bit")
+              .sort((a, b) =>
+                new Date(b.created_at) - new Date(a.created_at)
+              )[0];
+
+            if (!linux) {
+              core.setFailed("Could not find a linux-64bit artifact.");
+              return;
+            }
+
+            if (!windows) {
+              core.setFailed("Could not find a windows-64bit artifact.");
+              return;
+            }
+
+            console.log(`Linux artifact: ${linux.id}`);
+            console.log(`Linux created: ${linux.created_at}`);
+
+            console.log(`Windows artifact: ${windows.id}`);
+            console.log(`Windows created: ${windows.created_at}`);
+
+            core.setOutput("linux_id", linux.id);
+            core.setOutput("windows_id", windows.id);
+
+      # -------------------------------------------------
+      # 2. Download Linux artifact
+      # -------------------------------------------------
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.artifacts.outputs.linux_id }}
+          path: artifacts/linux
+
+      # -------------------------------------------------
+      # 3. Download Windows artifact
+      # -------------------------------------------------
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.artifacts.outputs.windows_id }}
+          path: artifacts/windows
+
+      # -------------------------------------------------
+      # 4. Prepare release files
+      # -------------------------------------------------
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+
+          # Linux binary
+          cp artifacts/linux/linux-64bit/UrsinaArmSimulator \
+             release/UrsinaArmSimulator-linux-x86_64
+
+          # Windows executable
+          cp artifacts/windows/windows-64bit/UrsinaArmSimulator.exe \
+             release/UrsinaArmSimulator-windows-x86_64.exe
+
+          chmod +x release/UrsinaArmSimulator-linux-x86_64
+
+          echo "Release files:"
+          ls -lh release/
+
+      # -------------------------------------------------
+      # 5. Create GitHub Release
+      # -------------------------------------------------
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Ursina Arm Simulator ${{ inputs.version }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            release/UrsinaArmSimulator-linux-x86_64
+            release/UrsinaArmSimulator-windows-x86_64.exe
