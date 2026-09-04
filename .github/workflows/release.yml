@@ -7,6 +7,7 @@ on:
         description: "Release version (e.g. v1.0.0)"
         required: true
         type: string
+
       prerelease:
         description: "Mark as prerelease"
         required: false
@@ -23,101 +24,190 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------------------------------
-      # 1. Find latest artifacts
-      # -------------------------------------------------
-      - name: Get latest artifacts
-        id: artifacts
+
+      # ============================================================
+      # 1. Find latest successful build64.yml run on main
+      # ============================================================
+      - name: Find latest successful build
+        id: build
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            const artifacts = await github.paginate(
-              github.rest.actions.listArtifactsForRepo,
-              {
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "build64.yml",
+              status: "success",
+              branch: "main",
+              per_page: 20
+            });
+
+            const runs = response.data.workflow_runs;
+
+            if (runs.length === 0) {
+              core.setFailed(
+                "No successful build64.yml workflow runs were found on main."
+              );
+              return;
+            }
+
+            // GitHub returns runs ordered from newest to oldest.
+            const latestRun = runs[0];
+
+            console.log("==========================================");
+            console.log("Latest successful build found");
+            console.log("==========================================");
+            console.log(`Run ID:    ${latestRun.id}`);
+            console.log(`Commit:    ${latestRun.head_sha}`);
+            console.log(`Branch:    ${latestRun.head_branch}`);
+            console.log(`Created:   ${latestRun.created_at}`);
+            console.log(`URL:       ${latestRun.html_url}`);
+            console.log("==========================================");
+
+            core.setOutput("run_id", latestRun.id);
+            core.setOutput("sha", latestRun.head_sha);
+
+      # ============================================================
+      # 2. Find artifacts from that exact workflow run
+      # ============================================================
+      - name: Find build artifacts
+        id: artifacts
+        uses: actions/github-script@v7
+        env:
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run_id = Number(process.env.RUN_ID);
+
+            const response =
+              await github.rest.actions.listWorkflowRunArtifacts({
                 owner,
                 repo,
+                run_id,
                 per_page: 100
-              }
+              });
+
+            const artifacts = response.data.artifacts
+              .filter(a => !a.expired);
+
+            console.log("Artifacts found:");
+
+            for (const artifact of artifacts) {
+              console.log(
+                `- ${artifact.name} (${artifact.id})`
+              );
+            }
+
+            const linux = artifacts.find(
+              a => a.name === "linux-64bit"
             );
 
-            // Ignore expired artifacts
-            const validArtifacts = artifacts.filter(a => !a.expired);
-
-            const linux = validArtifacts
-              .filter(a => a.name === "linux-64bit")
-              .sort((a, b) =>
-                new Date(b.created_at) - new Date(a.created_at)
-              )[0];
-
-            const windows = validArtifacts
-              .filter(a => a.name === "windows-64bit")
-              .sort((a, b) =>
-                new Date(b.created_at) - new Date(a.created_at)
-              )[0];
+            const windows = artifacts.find(
+              a => a.name === "windows-64bit"
+            );
 
             if (!linux) {
-              core.setFailed("Could not find a linux-64bit artifact.");
+              core.setFailed(
+                `linux-64bit artifact not found in run ${run_id}`
+              );
               return;
             }
 
             if (!windows) {
-              core.setFailed("Could not find a windows-64bit artifact.");
+              core.setFailed(
+                `windows-64bit artifact not found in run ${run_id}`
+              );
               return;
             }
 
-            console.log(`Linux artifact: ${linux.id}`);
-            console.log(`Linux created: ${linux.created_at}`);
-
-            console.log(`Windows artifact: ${windows.id}`);
-            console.log(`Windows created: ${windows.created_at}`);
+            console.log("");
+            console.log("Selected artifacts:");
+            console.log(`Linux:   ${linux.id}`);
+            console.log(`Windows: ${windows.id}`);
 
             core.setOutput("linux_id", linux.id);
             core.setOutput("windows_id", windows.id);
 
-      # -------------------------------------------------
-      # 2. Download Linux artifact
-      # -------------------------------------------------
+      # ============================================================
+      # 3. Download Linux artifact
+      # ============================================================
       - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.linux_id }}
-          path: artifacts/linux
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.artifacts.outputs.linux_id }}
+        run: |
+          mkdir -p artifacts/linux
 
-      # -------------------------------------------------
-      # 3. Download Windows artifact
-      # -------------------------------------------------
+          echo "Downloading Linux artifact ${ARTIFACT_ID}..."
+
+          curl -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o linux-artifact.zip
+
+          unzip -q linux-artifact.zip -d artifacts/linux
+
+          echo "Linux artifact contents:"
+          find artifacts/linux -type f
+
+      # ============================================================
+      # 4. Download Windows artifact
+      # ============================================================
       - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.windows_id }}
-          path: artifacts/windows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.artifacts.outputs.windows_id }}
+        run: |
+          mkdir -p artifacts/windows
 
-      # -------------------------------------------------
-      # 4. Prepare release files
-      # -------------------------------------------------
+          echo "Downloading Windows artifact ${ARTIFACT_ID}..."
+
+          curl -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
+            -o windows-artifact.zip
+
+          unzip -q windows-artifact.zip -d artifacts/windows
+
+          echo "Windows artifact contents:"
+          find artifacts/windows -type f
+
+      # ============================================================
+      # 5. Prepare release files
+      # ============================================================
       - name: Prepare release files
         run: |
           mkdir -p release
 
-          # Linux binary
+          echo "Preparing Linux binary..."
+
           cp artifacts/linux/linux-64bit/UrsinaArmSimulator \
              release/UrsinaArmSimulator-linux-x86_64
 
-          # Windows executable
+          echo "Preparing Windows executable..."
+
           cp artifacts/windows/windows-64bit/UrsinaArmSimulator.exe \
              release/UrsinaArmSimulator-windows-x86_64.exe
 
           chmod +x release/UrsinaArmSimulator-linux-x86_64
 
-          echo "Release files:"
+          echo ""
+          echo "=========================================="
+          echo "Release files"
+          echo "=========================================="
+
           ls -lh release/
 
-      # -------------------------------------------------
-      # 5. Create GitHub Release
-      # -------------------------------------------------
+      # ============================================================
+      # 6. Create GitHub Release
+      # ============================================================
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -125,6 +215,7 @@ jobs:
           name: Ursina Arm Simulator ${{ inputs.version }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
+
           files: |
             release/UrsinaArmSimulator-linux-x86_64
             release/UrsinaArmSimulator-windows-x86_64.exe
