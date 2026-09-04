@@ -130,101 +130,66 @@ jobs:
             console.log(`Linux:   ${linux.id}`);
             console.log(`Windows: ${windows.id}`);
 
+            console.log("");
+            console.log("Artifact sizes:");
+            console.log(`Linux:   ${linux.size_in_bytes} bytes`);
+            console.log(`Windows: ${windows.size_in_bytes} bytes`);
+
             core.setOutput("linux_id", linux.id);
             core.setOutput("windows_id", windows.id);
 
       # ============================================================
-      # 3. Download Linux artifact
+      # 3. Download COMPLETE Linux artifact
+      #
+      # IMPORTANT:
+      # The artifact is NOT extracted.
+      # The ZIP returned by GitHub is uploaded directly to the release.
       # ============================================================
-      - name: Download Linux artifact
+      - name: Download complete Linux artifact
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ steps.artifacts.outputs.linux_id }}
         run: |
-          mkdir -p artifacts/linux
+          echo "Downloading complete Linux artifact..."
+          echo "Artifact ID: ${ARTIFACT_ID}"
 
-          echo "Downloading Linux artifact ${ARTIFACT_ID}..."
-
-          curl -L \
+          curl -fL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
-            -o linux-artifact.zip
+            -o UrsinaArmSimulator-linux-x86_64.zip
 
-          unzip -q linux-artifact.zip -d artifacts/linux
-
-          echo "Linux artifact contents:"
-          find artifacts/linux -type f
+          echo ""
+          echo "Linux artifact downloaded:"
+          ls -lh UrsinaArmSimulator-linux-x86_64.zip
 
       # ============================================================
-      # 4. Download Windows artifact
+      # 4. Download COMPLETE Windows artifact
+      #
+      # IMPORTANT:
+      # The artifact is NOT extracted.
+      # The ZIP returned by GitHub is uploaded directly to the release.
       # ============================================================
-      - name: Download Windows artifact
+      - name: Download complete Windows artifact
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ steps.artifacts.outputs.windows_id }}
         run: |
-          mkdir -p artifacts/windows
+          echo "Downloading complete Windows artifact..."
+          echo "Artifact ID: ${ARTIFACT_ID}"
 
-          echo "Downloading Windows artifact ${ARTIFACT_ID}..."
-
-          curl -L \
+          curl -fL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
-            -o windows-artifact.zip
-
-          unzip -q windows-artifact.zip -d artifacts/windows
-
-          echo "Windows artifact contents:"
-          find artifacts/windows -type f
-
-      # ============================================================
-      # 5. Prepare release files
-      # ============================================================
-      - name: Prepare release files
-        run: |
-          mkdir -p release
-
-          echo "Preparing Linux binary..."
-
-          # Busca el archivo UrsinaArmSimulator en la estructura del artifact
-          LINUX_BIN=$(find artifacts/linux -name "UrsinaArmSimulator" -type f | head -1)
-          
-          if [ -z "$LINUX_BIN" ]; then
-            echo "ERROR: Linux binary not found!"
-            echo "Contents of artifacts/linux:"
-            find artifacts/linux -type f
-            exit 1
-          fi
-
-          cp "$LINUX_BIN" release/UrsinaArmSimulator-linux-x86_64
-
-          echo "Preparing Windows executable..."
-
-          # Busca el archivo UrsinaArmSimulator.exe en la estructura del artifact
-          WINDOWS_BIN=$(find artifacts/windows -name "UrsinaArmSimulator.exe" -type f | head -1)
-          
-          if [ -z "$WINDOWS_BIN" ]; then
-            echo "ERROR: Windows binary not found!"
-            echo "Contents of artifacts/windows:"
-            find artifacts/windows -type f
-            exit 1
-          fi
-
-          cp "$WINDOWS_BIN" release/UrsinaArmSimulator-windows-x86_64.exe
-
-          chmod +x release/UrsinaArmSimulator-linux-x86_64
+            -o UrsinaArmSimulator-windows-x86_64.zip
 
           echo ""
-          echo "=========================================="
-          echo "Release files"
-          echo "=========================================="
-
-          ls -lh release/
+          echo "Windows artifact downloaded:"
+          ls -lh UrsinaArmSimulator-windows-x86_64.zip
 
       # ============================================================
-      # 6. Create GitHub Release
+      # 5. Create GitHub Release
       # ============================================================
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -235,5 +200,5 @@ jobs:
           generate_release_notes: true
 
           files: |
-            release/UrsinaArmSimulator-linux-x86_64
-            release/UrsinaArmSimulator-windows-x86_64.exe
+            UrsinaArmSimulator-linux-x86_64.zip
+            UrsinaArmSimulator-windows-x86_64.zip
