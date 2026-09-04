@@ -188,13 +188,31 @@ jobs:
 
           echo "Preparing Linux binary..."
 
-          cp artifacts/linux/linux-64bit/UrsinaArmSimulator \
-             release/UrsinaArmSimulator-linux-x86_64
+          # Busca el archivo UrsinaArmSimulator en la estructura del artifact
+          LINUX_BIN=$(find artifacts/linux -name "UrsinaArmSimulator" -type f | head -1)
+          
+          if [ -z "$LINUX_BIN" ]; then
+            echo "ERROR: Linux binary not found!"
+            echo "Contents of artifacts/linux:"
+            find artifacts/linux -type f
+            exit 1
+          fi
+
+          cp "$LINUX_BIN" release/UrsinaArmSimulator-linux-x86_64
 
           echo "Preparing Windows executable..."
 
-          cp artifacts/windows/windows-64bit/UrsinaArmSimulator.exe \
-             release/UrsinaArmSimulator-windows-x86_64.exe
+          # Busca el archivo UrsinaArmSimulator.exe en la estructura del artifact
+          WINDOWS_BIN=$(find artifacts/windows -name "UrsinaArmSimulator.exe" -type f | head -1)
+          
+          if [ -z "$WINDOWS_BIN" ]; then
+            echo "ERROR: Windows binary not found!"
+            echo "Contents of artifacts/windows:"
+            find artifacts/windows -type f
+            exit 1
+          fi
+
+          cp "$WINDOWS_BIN" release/UrsinaArmSimulator-windows-x86_64.exe
 
           chmod +x release/UrsinaArmSimulator-linux-x86_64
 
