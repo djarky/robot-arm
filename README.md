@@ -1,7 +1,8 @@
 # Robot Arm Control System
 
-nuevo branch para agregar la funcionalidad de 6 grados de liberdad y modelo 3D GLB y blend basado en el modelo 
-https://www.printables.com/model/1603833-not-arduino-robot-arm-by-fabri-creator
+para conocer las ultimas caracteristicas verifique el nuevo branch con funcionalidad de 6 grados de liberdad y modelo 3D GLB y blender 
+
+![main window](screenshot.png)
 
 Un sistema avanzado y modular para el control de brazos robóticos, integrando visión artificial, simulación 3D e interfaces de hardware en tiempo real.
 
