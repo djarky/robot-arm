@@ -152,8 +152,11 @@ class TransformationGizmo(Entity):
         path = [Vec3(math.cos(math.radians(i*(360/res))), 0, math.sin(math.radians(i*(360/res)))) for i in range(res+1)]
         cs = [Vec3(math.cos(math.radians(i*(360/8)))*0.02, math.sin(math.radians(i*(360/8)))*0.02, 0) for i in range(9)]
         
+        # rot_x: ring in the YZ plane → rotate the ring template (which lies in XZ) by 90° around Z to stand in YZ
         self.rot_x = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.red, rotation_z=90, collider='mesh')
+        # rot_y: ring in the XZ plane → the default template already lies in XZ, no rotation needed
         self.rot_y = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.green, collider='mesh')
+        # rot_z: ring in the XY plane → rotate the ring template by 90° around X to stand in XY
         self.rot_z = Button(parent=self.visuals_rotate, model=Pipe(path=path, base_shape=cs), color=color.blue, rotation_x=90, collider='mesh')
 
     def attach_to(self, entity):
@@ -395,9 +398,10 @@ class TransformationGizmo(Entity):
         elif self.mode == 'rotate':
             new_rot = list(self.original_transform['rot'])
             val = (dx + dy) * 50
-            if eff_axis == 'x': new_rot[0] += val
-            elif eff_axis == 'y': new_rot[2] += val
-            elif eff_axis == 'z': new_rot[1] += val
+            # Ursina rotation: [rotation_x, rotation_y, rotation_z]
+            if eff_axis == 'x': new_rot[0] += val    # rotation_x
+            elif eff_axis == 'y': new_rot[1] += val  # rotation_y (heading)
+            elif eff_axis == 'z': new_rot[2] += val  # rotation_z
             else: # Libre (YAW por defecto)
                 new_rot[1] += val
             self.target.rotation = tuple(new_rot)

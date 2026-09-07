@@ -19,21 +19,25 @@ class IK_Solver:
         self.L_TOOL = np.linalg.norm(self.TOOL_OFFSET)
         
         # Joint limits (degrees)
-        self.limits = [(-90, 90)] * 5
+        # J4 (wrist pitch) needs wider range because it compensates J1+J2
+        # to keep the tool pointing down. The sum -(J1+J2) can exceed ±90°.
+        self.limits = [(-90, 90), (-90, 90), (-90, 90), (-90, 90), (-180, 180)]
 
-    def solve(self, target_pos, target_up=None):
+    def solve(self, target_pos, target_up=None, verbose=False):
         """
         Calculates joint angles for a target position (x, y, z).
         target_pos: (x, y, z) in world coordinates.
         target_up: (ux, uy, uz) direction for the gripper (default: pointing down).
+        verbose: If True, print all intermediate calculations.
         
         Returns: List of 5 angles [j0...j4] in degrees, or None if unreachable.
         """
         tx, ty, tz = target_pos
         
         # 1. Base Angle (J0)
-        # Using atan2(z, x) because in this sim X/Z is the floor.
-        theta0 = math.degrees(math.atan2(tz, tx))
+        # atan2(z, x) gives the geometric angle in the XZ plane (counter-clockwise).
+        # Panda3D heading (YAW) is clockwise when viewed from above, so we NEGATE.
+        theta0 = -math.degrees(math.atan2(tz, tx))
         
         # 2. Wrist Center Calculation (Decoupling)
         # We calculate the wrist position such that the TOOL_OFFSET (when rotated)
@@ -50,7 +54,8 @@ class IK_Solver:
             # wrist is at target_pos + (0, L, 0).
             # If TOOL_OFFSET has X/Z, we need to rotate it with J0.
             
-            # Rotate TOOL_OFFSET by J0 (theta0)
+            # Rotate TOOL_OFFSET by the GEOMETRIC angle of J0 (NOT the negated joint angle).
+            # We use the original atan2 result (positive = CCW) for spatial calculations.
             rad0 = math.atan2(tz, tx)
             c0, s0 = math.cos(rad0), math.sin(rad0)
             
@@ -68,6 +73,12 @@ class IK_Solver:
                 ty + v_off_y, 
                 tz - (off_x * s0 + off_z * c0)
             )
+        
+        if verbose:
+            print(f"  [IK VERBOSE] target=({tx:.3f}, {ty:.3f}, {tz:.3f})")
+            print(f"  [IK VERBOSE] theta0={theta0:.2f}°, rad0={math.atan2(tz, tx):.4f}")
+            print(f"  [IK VERBOSE] TOOL_OFFSET={self.TOOL_OFFSET}, off_x={off_x:.4f}, off_z={off_z:.4f}, v_off_y={v_off_y:.4f}")
+            print(f"  [IK VERBOSE] wrist_center=({wrist_center[0]:.3f}, {wrist_center[1]:.3f}, {wrist_center[2]:.3f})")
             
         # 3. 2D Plane Geometry (J1, J2)
         # Project wrist center to 2D plane (r, y_rel)
@@ -83,16 +94,19 @@ class IK_Solver:
         
         if D > (max_reach + epsilon):
             # PROYECCIÓN: El punto está fuera de alcance. 
-            # Re-escalamos el objetivo para que esté justo en el borde del alcance máximo.
             scale = max_reach / D
+            if verbose: print(f"  [IK VERBOSE] D={D:.4f} > max_reach={max_reach:.4f}, projecting (scale={scale:.4f})")
             r *= scale
             y_rel *= scale
-            # Recalcular D para que sea exacto
             D = math.sqrt(r**2 + y_rel**2)
-            # No retornamos None aquí, permitimos que el brazo se estire al máximo
         elif D < (abs(self.L1 - self.L2) - epsilon):
-            # Demasiado cerca del hombro
-            return None # Unreachable
+            if verbose: print(f"  [IK VERBOSE] D={D:.4f} < min_reach={abs(self.L1 - self.L2):.4f}, clamping to min_reach")
+            D = abs(self.L1 - self.L2) # Clamp to minimum reach
+            r = 0 # Point straight down/up relative to shoulder to achieve minimum distance
+            y_rel = D if y_rel > 0 else -D
+        
+        if verbose:
+            print(f"  [IK VERBOSE] r={r:.4f}, y_rel={y_rel:.4f}, D={D:.4f}")
             
         # Law of Cosines for J2 (Elbow)
         # cos_beta = (L1^2 + L2^2 - D^2) / (2 * L1 * L2)
@@ -106,12 +120,16 @@ class IK_Solver:
         cos_alpha = (self.L1**2 + D**2 - self.L2**2) / (2 * self.L1 * D)
         alpha = math.acos(np.clip(cos_alpha, -1, 1))
         
+        # "Elbow-up" configuration: add alpha.
+        # This places the elbow ABOVE the shoulder-to-target line.
+        # Elbow-up keeps J1 closer to 0° and produces smaller J4 compensation,
+        # which is important because J4 = -(J1+J2) must stay within limits.
+        # ("Elbow-down" uses phi1 - alpha but causes J4 to exceed limits.)
         theta1 = math.degrees(phi1 + alpha) - 90 # Adjust for J1 being vertical at 0
         
         # 4. Orientation (J3, J4, J5)
-        # Simplified for "pointing down" trayectories:
-        # If we want to stay pointing down while J1, J2 move:
-        # J4 (Wrist Pitch) compensates J1 and J2
+        # Simplified for "pointing down" trajectories:
+        # J4 (Wrist Pitch) compensates J1 and J2 to keep tool vertical.
         theta4 = -(theta1 + theta2)
         
         # J3 and J5 can remain at 0 for planar 2D drawing unless rotation is needed
@@ -120,17 +138,123 @@ class IK_Solver:
         
         angles = [theta0, theta1, theta2, theta3, theta4]
         
-        # Apply limits strictly
+        if verbose:
+            print(f"  [IK VERBOSE] theta0={theta0:.2f}°, theta1={theta1:.2f}°, theta2={theta2:.2f}°, theta4={theta4:.2f}°")
+        
+        # Apply limits strictly (Clamp to closest physical pose instead of rejecting)
         rounded_angles = []
         for i, a in enumerate(angles):
             low, high = self.limits[i]
             val = round(a, 2)
-            if val < low or val > high:
-                print(f"  [IK DEBUG] Joint {i} out of range: {val} (Limits: {low} to {high})")
-                return None
-            rounded_angles.append(val)
+            clamped_val = max(low, min(high, val))
+            if val != clamped_val and verbose:
+                print(f"  [IK VERBOSE] CLAMPED: Joint {i} from {val}° to {clamped_val}° (Limits: {low} to {high})")
+            rounded_angles.append(clamped_val)
             
-        return rounded_angles
+    def forward_kinematics(self, angles):
+        """
+        Pure math Forward Kinematics for ultra-fast heuristic evaluation.
+        Returns the (x, y, z) position of the CNC tip given joint angles.
+        """
+        j0, j1, j2, _, j4 = angles
+        
+        # 1. Angles in radians
+        rad0 = math.radians(-j0) # Yaw (inverted according to IK logic)
+        rad1 = math.radians(j1)
+        rad12 = math.radians(j1 + j2)
+        rad124 = math.radians(j1 + j2 + j4)
+        
+        # 2. 2D Radial Plane (r, y)
+        # Shoulder at (0, D1)
+        r_elbow = self.L1 * math.cos(rad1)
+        y_elbow = self.D1 + self.L1 * math.sin(rad1)
+        
+        r_wrist = r_elbow + self.L2 * math.cos(rad12)
+        y_wrist = y_elbow + self.L2 * math.sin(rad12)
+        
+        # Tool is L_TOOL along the J4 direction
+        r_tip = r_wrist + self.L_TOOL * math.cos(rad124)
+        y_tip = y_wrist + self.L_TOOL * math.sin(rad124)
+        
+        # 3. 3D World coordinates (yaw applied)
+        c0 = math.cos(rad0)
+        s0 = math.sin(rad0)
+        
+        # Base position from radial
+        x_base = r_tip * c0
+        z_base = r_tip * s0
+        
+        # Apply lateral offset (rotated by yaw)
+        off_x, _, off_z = self.TOOL_OFFSET
+        x_final = x_base + (off_x * c0 - off_z * s0)
+        z_final = z_base + (off_x * s0 + off_z * c0)
+        
+        return (x_final, y_tip, z_final)
+
+    def solve_heuristic(self, target_pos, start_angles, max_iters=50, tolerance=0.01):
+        """
+        Cyclic Coordinate Descent / Gradient Descent IK.
+        Iteratively adjusts start_angles to reach target_pos to avoid singularities.
+        """
+        current_angles = list(start_angles)
+        tx, ty, tz = target_pos
+        
+        # Joints to optimize: J0, J1, J2, J4 (indices 0, 1, 2, 4)
+        joints = [0, 1, 2, 4]
+        
+        # Step sizes (degrees) - start large for speed, reduce for precision
+        step_sizes = [5.0, 1.0, 0.2]
+        
+        for step in step_sizes:
+            for _ in range(max_iters):
+                improved = False
+                
+                # Current distance
+                fx, fy, fz = self.forward_kinematics(current_angles)
+                best_dist = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                
+                if best_dist < tolerance**2:
+                    return current_angles # Reached target!
+                
+                for j in joints:
+                    original_val = current_angles[j]
+                    low, high = self.limits[j]
+                    
+                    # Try + step
+                    test_plus = min(high, original_val + step)
+                    if test_plus != original_val:
+                        current_angles[j] = test_plus
+                        fx, fy, fz = self.forward_kinematics(current_angles)
+                        dist_plus = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                    else:
+                        dist_plus = float('inf')
+                        
+                    # Try - step
+                    test_minus = max(low, original_val - step)
+                    if test_minus != original_val:
+                        current_angles[j] = test_minus
+                        fx, fy, fz = self.forward_kinematics(current_angles)
+                        dist_minus = (fx - tx)**2 + (fy - ty)**2 + (fz - tz)**2
+                    else:
+                        dist_minus = float('inf')
+                    
+                    # Keep the best
+                    if dist_plus < best_dist and dist_plus <= dist_minus:
+                        best_dist = dist_plus
+                        current_angles[j] = test_plus
+                        improved = True
+                    elif dist_minus < best_dist:
+                        best_dist = dist_minus
+                        current_angles[j] = test_minus
+                        improved = True
+                    else:
+                        # Revert
+                        current_angles[j] = original_val
+                
+                if not improved:
+                    break # Local minimum for this step size, move to finer step
+                    
+        return current_angles
 
 # Test if executed directly
 if __name__ == "__main__":

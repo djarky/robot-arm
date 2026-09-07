@@ -38,7 +38,12 @@ class CameraMixin:
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config.json")
             if os.path.exists(config_path):
                 with open(config_path, "r") as f:
-                    config = json.load(f)
+                    content = f.read().strip()
+                    if content:
+                        try:
+                            config = json.loads(content)
+                        except json.JSONDecodeError:
+                            config = {}
             
             config["camera"] = {
                 "position": [self.cam.x, self.cam.y, self.cam.z],
