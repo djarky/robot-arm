@@ -1,0 +1,176 @@
+{
+    "axes": {
+        "base": 0,
+        "shoulder": 1,
+        "elbow": 3,
+        "j3": 4,
+        "j4": 2,
+        "j5": 5
+    },
+    "buttons": {
+        "gripper_open": 0,
+        "gripper_close": 1,
+        "reset": 7,
+        "snapshot": 3,
+        "toggle_console": 6
+    },
+    "deadzone": 0.1,
+    "controller_style": "Keyboard",
+    "profiles": {
+        "KM": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {
+                "base_pos": {
+                    "type": "button",
+                    "id": 81
+                },
+                "base_neg": {
+                    "type": "button",
+                    "id": 87
+                },
+                "shoulder_pos": {
+                    "type": "button",
+                    "id": 65
+                },
+                "shoulder_neg": {
+                    "type": "button",
+                    "id": 83
+                },
+                "gripper_open_pos": {
+                    "type": "button",
+                    "id": 90
+                }
+            },
+            "sensitivity": 1.2,
+            "deadzone": 0.1
+        },
+        "/dev/input/event8": {
+            "axes": {
+                "base": 105,
+                "shoulder": 412,
+                "elbow": 407,
+                "j3": 103,
+                "j4": 108,
+                "j5": 108
+            },
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/event6": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/event7": {
+            "axes": {
+                "base": 103
+            },
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/event4": {
+            "axes": {
+                "base": 3,
+                "shoulder": 5,
+                "elbow": 5,
+                "j3": 4,
+                "j4": 3,
+                "j5": 4
+            },
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/event5": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {},
+            "deadzone": 0.0
+        },
+        "DSU": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "Wiimote": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "WIIMOTE_AUTO": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {},
+            "sensitivity": 1.1
+        },
+        "JOY_0": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {
+                "elbow_pos": {
+                    "type": "axis",
+                    "id": 3
+                },
+                "shoulder_neg": {
+                    "type": "axis",
+                    "id": 1
+                },
+                "base_neg": {
+                    "type": "axis",
+                    "id": 0
+                }
+            },
+            "sensitivity": 1.6,
+            "deadzone": 0.07
+        },
+        "/dev/input/js0": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {
+                "base_pos": {
+                    "type": "axis",
+                    "id": 0
+                }
+            }
+        },
+        "/dev/input/js2": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "SDL_0": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/ttyS31": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/event3": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "/dev/input/js1": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "1": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        },
+        "3": {
+            "axes": {},
+            "buttons": {},
+            "inputs": {}
+        }
+    },
+    "active_category": "Teclado",
+    "active_device_id": "KM",
+    "force_raw_udev": true,
+    "input_driver": "Pygame"
+}

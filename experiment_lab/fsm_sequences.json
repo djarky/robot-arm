@@ -1,0 +1,392 @@
+{
+    "Pose_1": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Pose_2": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Pose_3": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "3",
+                "angles": [
+                    -88,
+                    -23,
+                    -40,
+                    -90,
+                    -21,
+                    -10
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Pose_4": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "4",
+                "angles": [
+                    -88,
+                    -84,
+                    80,
+                    9,
+                    21,
+                    -10
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Pose_5": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "5",
+                "angles": [
+                    -88,
+                    -15,
+                    48,
+                    86,
+                    21,
+                    -10
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Pose_6": {
+        "entry_state": "main",
+        "states": {
+            "main": {
+                "pose": "6",
+                "angles": [
+                    -88,
+                    78,
+                    -90,
+                    86,
+                    -90,
+                    -10
+                ],
+                "transition_time": 1.0,
+                "transitions": []
+            }
+        }
+    },
+    "Seq_unos": {
+        "entry_state": "step_0",
+        "states": {
+            "step_0": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 0.5,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 1.5,
+                        "next": "step_1"
+                    }
+                ]
+            },
+            "step_1": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 6.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 7.0,
+                        "next": "step_2"
+                    }
+                ]
+            },
+            "step_2": {
+                "pose": "3",
+                "angles": [
+                    -88,
+                    -23,
+                    -40,
+                    -90,
+                    -21,
+                    -10
+                ],
+                "transition_time": 10.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 11.0,
+                        "next": "step_3"
+                    }
+                ]
+            },
+            "step_3": {
+                "pose": "5",
+                "angles": [
+                    -88,
+                    -15,
+                    48,
+                    86,
+                    21,
+                    -10
+                ],
+                "transition_time": 0.1,
+                "transitions": []
+            }
+        }
+    },
+    "Seq_dos": {
+        "entry_state": "step_0",
+        "states": {
+            "step_0": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 0.5,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 1.5,
+                        "next": "step_1"
+                    }
+                ]
+            },
+            "step_1": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 4.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 5.0,
+                        "next": "step_2"
+                    }
+                ]
+            },
+            "step_2": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 1.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 2.0,
+                        "next": "step_3"
+                    }
+                ]
+            },
+            "step_3": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 8.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 9.0,
+                        "next": "step_4"
+                    }
+                ]
+            },
+            "step_4": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 3.0,
+                "transitions": []
+            }
+        }
+    },
+    "Seq_aaa": {
+        "entry_state": "step_0",
+        "states": {
+            "step_0": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 0.5,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 1.5,
+                        "next": "step_1"
+                    }
+                ]
+            },
+            "step_1": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 2.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 3.0,
+                        "next": "step_2"
+                    }
+                ]
+            },
+            "step_2": {
+                "pose": "6",
+                "angles": [
+                    -88,
+                    78,
+                    -90,
+                    86,
+                    -90,
+                    -10
+                ],
+                "transition_time": 2.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 3.0,
+                        "next": "step_3"
+                    }
+                ]
+            },
+            "step_3": {
+                "pose": "2",
+                "angles": [
+                    -88,
+                    -78,
+                    -50,
+                    45,
+                    90,
+                    -10
+                ],
+                "transition_time": 2.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 3.0,
+                        "next": "step_4"
+                    }
+                ]
+            },
+            "step_4": {
+                "pose": "1",
+                "angles": [
+                    90,
+                    -78,
+                    0,
+                    90,
+                    -90,
+                    0
+                ],
+                "transition_time": 2.0,
+                "transitions": [
+                    {
+                        "type": "time",
+                        "params": 3.0,
+                        "next": "step_5"
+                    }
+                ]
+            },
+            "step_5": {
+                "pose": "None",
+                "angles": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "transition_time": 2.0,
+                "transitions": []
+            }
+        }
+    }
+}
